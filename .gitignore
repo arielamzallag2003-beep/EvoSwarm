@@ -1,0 +1,38 @@
+# Unreal Engine generated folders
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.user
+
+# OS cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Misc / local scratch
+build_*.txt
+*.log
+
+# Houdini intermediate exports (the .py generators + imported uassets are committed, not these)
+Tools/Houdini/out/
+Tools/Houdini/import_log.txt
+Tools/Houdini/backup/
+*.hip
+*.hiplc
+*.hipnc
