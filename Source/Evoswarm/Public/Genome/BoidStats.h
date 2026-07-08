@@ -10,6 +10,8 @@
 #include "CoreMinimal.h"
 #include "BoidStats.generated.h"
 
+struct FBoidStateFragment;
+
 class USpeciesConfig;
 
 /** Every evolvable stat. Keep Count last. */
@@ -105,4 +107,7 @@ public:
 	 * The amount of change scales with MutationRate. This is the per-birth genetic operator.
 	 */
 	static void Reallocate(FBoidGenome& Genome, const USpeciesConfig& Species, FRandomStream& Rng, float MutationRate);
+	
+	// Compute the attractiveness, normalized, based on health, age and reproduction count
+	static float ComputeAttractivenessScore(const FBoidGenome& Genome, const FBoidStateFragment& State);
 };

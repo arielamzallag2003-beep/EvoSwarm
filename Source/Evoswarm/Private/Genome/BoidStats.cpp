@@ -1,6 +1,8 @@
 // Copyright Evoswarm.
 
 #include "BoidStats.h"
+
+#include "BoidFragments.h"
 #include "SpeciesConfig.h"
 #include "EvoswarmTuning.h"
 
@@ -228,4 +230,28 @@ void FBoidGenomeLibrary::Reallocate(FBoidGenome& Genome, const USpeciesConfig& S
 	}
 
 	ClampToBudget(Genome, Species);
+}
+
+float FBoidGenomeLibrary::ComputeAttractivenessScore(const FBoidGenome& Genome, const FBoidStateFragment& State)
+{
+	// 1. SANTÉ (60% du score)
+	const float MaxHP = Evo::MaxHP(Genome);
+	const float HealthFraction = (MaxHP > 0.f) ? FMath::Clamp(State.CurrentHP / MaxHP, 0.f, 1.f) : 0.f;
+
+	// 2. ÂGE NORMALISÉ VIA LIFETIME (20% du score)
+	const float MaxLife = Genome.Stats[StatIndex(EBoidStat::Lifespan)];
+	const float LifespanWindow = MaxLife - Evo::MaturityAge;
+	float AgeFraction = 0.f;
+	if (LifespanWindow > 0.f)
+	{
+		const float AgeSinceMaturity = FMath::Max(0.f, State.Age - Evo::MaturityAge);
+		AgeFraction = FMath::Clamp(AgeSinceMaturity / LifespanWindow, 0.f, 1.f);
+	}
+
+	// 3. REPRODUCTION (20% du score)
+	const float MaxExpectedRepro = 5.f;
+	const float ReproFraction = FMath::Clamp(static_cast<float>(State.ReproductionCount) / MaxExpectedRepro, 0.f, 1.f);
+
+	// Score final STRICTEMENT entre 0.0 et 1.0
+	return (HealthFraction * 0.6f) + (AgeFraction * 0.20f) + (ReproFraction * 0.20f);
 }

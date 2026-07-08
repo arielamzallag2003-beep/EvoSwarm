@@ -76,11 +76,11 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			}
 			const FVector Pos = Xf[It].GetTransform().GetLocation();
 
-			// Sexual selection: among ready same-species partners in range, choose the one in
-			// best body condition (the fittest survivor), not merely the closest one.
+			// Sexual selection: among ready same-species partners in range, choose the one with
+			// the higher attractiveness (see ComputeAttractivenessScore), and lower genetic distance
 			FMassEntityHandle Mate;
 			FVector MatePos = FVector::ZeroVector;
-			float BestCondition = -1.f;
+			float BestScore = -1.f;
 			bool bFoundMate = false;
 			Grid->QueryAgents(Pos, Evo::MatingRadius, [&](const FGridAgent& Other)
 			{
@@ -88,9 +88,42 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				{
 					return;
 				}
-				if (Other.Condition > BestCondition)
+
+				// 1. On va chercher TRÈS rapidement le génome de l'autre Boid dans Mass via son EntityHandle
+				const FBoidGenomeFragment* OtherGenFragment = EntityManager.GetFragmentDataPtr<FBoidGenomeFragment>(Other.Entity);
+				if (!OtherGenFragment)
 				{
-					BestCondition = Other.Condition;
+					return; // Sécurité si l'entité est en train de disparaître
+				}
+    
+				const FBoidGenome& OtherGenome = OtherGenFragment->Genome;
+
+				// 2. On récupère l'attractivité brute calculée
+				float AttractionScore = Other.Attractiveness;
+				float TotalNormalizedDiff = 0.f;
+
+				// 3. Différence génétique normalisée par statistique
+				for (int32 Index = 0; Index < NumBoidStats; ++Index)
+				{
+					const FBoidStatDef Def = Config->GetStatDef(static_cast<EBoidStat>(Index));
+					const float Range = FMath::Max(Def.Min, Def.Max) - Def.Min;
+
+					if (Range > KINDA_SMALL_NUMBER)
+					{
+						// Correction ici : on compare G (le boid actuel) et OtherGenome (le partenaire trouvé via Mass)
+						const float RawDiff = FMath::Abs(G.Stats[Index] - OtherGenome.Stats[Index]);
+						TotalNormalizedDiff += (RawDiff / Range);
+					}
+				}
+
+				float GenomeDifferenceFraction = TotalNormalizedDiff / static_cast<float>(NumBoidStats);
+    
+				// On applique le malus de différence génétique
+				AttractionScore -= (GenomeDifferenceFraction * 0.5f);
+
+				if (AttractionScore > BestScore)
+				{
+					BestScore = AttractionScore;
 					Mate = Other.Entity;
 					MatePos = Other.Position;
 					bFoundMate = true;
@@ -109,11 +142,20 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				continue;
 			}
 
-			// Offspring inherits a mix of both parents' genomes, then mutates.
-			const FBoidGenome Child = FBoidGenomeLibrary::Crossover(G, MateGen->Genome, *Config, Rng);
+			// === CHAÎNAGE CROSSOVER + MUTATION ===
+			// 1. Le mélange (40/40/19/1)
+			FBoidGenome Child = FBoidGenomeLibrary::Crossover(G, MateGen->Genome, *Config, Rng);
+			// 2. La micro-mutation sur l'enfant
+			Child = FBoidGenomeLibrary::Mutate(Child, *Config, Rng);
+
 			const FVector BirthPos = (Pos + MatePos) * 0.5f + FVector(Rng.FRandRange(-120.f, 120.f), Rng.FRandRange(-120.f, 120.f), 0.f);
 			const int32 ChildGeneration = FMath::Max(S.Generation, MateState->Generation) + 1;
 			Sim->RequestBirth(Species, Child, BirthPos, ChildGeneration);
+
+			// === HISTORIQUE DES REPRODUCTIONS ===
+			// On augmente le compteur des deux parents puisque la naissance est validée !
+			S.ReproductionCount++;
+			MateState->ReproductionCount++;
 
 			// Both parents pay the cost and go on cooldown.
 			S.CurrentHunger -= Evo::ReproHungerCost * MaxHunger;

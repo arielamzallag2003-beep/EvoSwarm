@@ -54,6 +54,9 @@ struct EVOSWARM_API FBoidStateFragment : public FMassFragment
 
 	/** Generations from the founding population (0 = initial spawn). Offspring = parent + 1. */
 	int32 Generation = 0;
+	
+	// Nombre de fois ou l'individu s'est reproduit
+	int32 ReproductionCount = 0;
 };
 
 /** What kind of food an entity is. */
