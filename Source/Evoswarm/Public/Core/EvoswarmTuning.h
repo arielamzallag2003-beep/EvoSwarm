@@ -66,6 +66,7 @@ namespace Evo
 	inline constexpr float FleeWeight           = 4.5f;
 	inline constexpr float ChaseWeightScale     = 0.5f;  // multiplied by the Aggressiveness stat
 	inline constexpr float SeekFoodWeight       = 2.5f;  // herbivore pull toward food, scaled by hunger
+	inline constexpr float SeekPartnerWeight	= 2.5f;
 	inline constexpr float MaxSteerAccel        = 3000.f;
 	inline constexpr float WanderAccel          = 600.f;
 
