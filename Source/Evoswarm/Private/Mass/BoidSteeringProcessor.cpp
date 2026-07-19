@@ -63,10 +63,10 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			const FBiomeParams SelfBiome = Evo::GetBiomeParams(Evo::BiomeAt(Pos.X, Pos.Y));
 			
 			// Si le boid dort, son rayon de perception est divisé par 10 (vulnérabilité accrue)
-			const float PerceptionScale = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 0.1f : 1.f;
+			const float PerceptionScale = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 0.5f : 1.f;
 			const float Radius = Evo::PerceptionRadius(G) * SelfBiome.PerceptionMultiplier * PerceptionScale;
 			const float Need = 1.f - FMath::Clamp(S.CurrentHunger / Evo::MaxHunger(G), 0.f, 1.f);
-
+			
 			// Si le boid dort, on ignore les forces de déplacement physiques
 			if (S.CurrentBehaviorState == EBoidState::Sleeping)
 			{
@@ -86,9 +86,10 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			FVector NearestPrey = FVector::ZeroVector;
 			float BestPreyDistSq = TNumericLimits<float>::Max();
 			bool bHasPrey = false;
-			bool bThreatIsNear = false;
 
 			const bool bCanHunt = Evo::CanHunt(G);
+
+			float TotalThreatWeight = 0.f; // --- AJOUT : Accumulateur de menace ---
 
 			Grid->QueryAgents(Pos, Radius, [&](const FGridAgent& Other)
 			{
@@ -126,8 +127,11 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					{
 						const float Awareness = FMath::Clamp(1.f - Other.Stealth * 0.5f, 0.f, 1.f);
 						const float Fear = 1.f + Other.Intimidation * Evo::IntimidationFleeScale;
+						// On accumule la menace brute reçue pour évaluer le danger global
+						TotalThreatWeight += Threat * Weight * Fear;
+
+						// La force de fuite nous pousse à l'OPPOSÉ du danger
 						FleeSum -= Dir * (Awareness * Fear * Threat * Weight);
-						bThreatIsNear = true; // Signalement d'une menace à proximité
 					}
 					if (bCanHunt)
 					{
@@ -143,7 +147,9 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			});
 			
 			// --- MACHINE A ETATS (FSM) : TRANSITIONS DE L'AGENT ---
-			if (bThreatIsNear)
+			// Tu peux ajuster le seuil (ici 0.6f). Plus il est haut, plus le boid est courageux.
+			const float FearThreshold = 0.8f; 
+			if (TotalThreatWeight > FearThreshold)
 			{
 				S.CurrentBehaviorState = EBoidState::Fleeing;
 			}
@@ -174,17 +180,22 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 				{
 					S.CurrentBehaviorState = EBoidState::Wandering;
 				}
+				else if (S.CurrentFatigue <= 0.0f && S.CurrentBehaviorState == EBoidState::Sleeping)
+				{
+					S.CurrentBehaviorState = EBoidState::Wandering;
+				}
 			}
 			
 			// --- MODIFICATION : RESTRUCTURATION DE LA LOGIQUE DE CALCUL PAR ÉTAT ACCUMULÉ ---
-						// Au lieu de mélanger toutes les forces de manière linéaire, on initialise la séparation 
-						// et on distribue proprement les comportements dans des embranchements "else if" distincts.
+			// Au lieu de mélanger toutes les forces de manière linéaire, on initialise la séparation 
+			// et on distribue proprement les comportements dans des embranchements "else if" distincts.
 			FVector Steer = Separation * Evo::SeparationWeight;
 			
 			if (S.CurrentBehaviorState == EBoidState::Fleeing)
 			{
 				// La force de séparation est accrue en fuite pour éviter les embouteillages fatals devant les prédateurs.
-				Steer = Separation * (Evo::SeparationWeight * 1.5f);
+				//Steer = Separation * (Evo::SeparationWeight * 1.5f);
+				Steer = Separation * (Evo::SeparationWeight * 1.0f);
 				Steer += FleeSum * Evo::FleeWeight;
 			}
 			else if (S.CurrentBehaviorState == EBoidState::Foraging)
@@ -220,6 +231,15 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 				{
 					Steer += (NearestPrey - Pos).GetSafeNormal()
 						* (Evo::ChaseWeightScale * G.Get(EBoidStat::Aggressiveness) * (0.5f + Need) * Evo::MeatDigestion(G));
+
+					// --- AJOUT : On mémorise le résultat pour le processeur de débug ---
+					S.bDebugHasPrey = bHasPrey;
+					S.LastTargetPreyPos = NearestPrey;
+				}
+				else
+				{
+					// Indispensable pour couper le dessin dès que la proie s'échappe ou meurt
+					S.bDebugHasPrey = false; 
 				}
 			}
 			// =========================================================================
@@ -306,7 +326,23 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 				Steer.Y += -FMath::Sign(Pos.Y) * (Evo::BoundsTurnAccel / Evo::MaxSteerAccel) * (1.f - EdgeY / Evo::BoundsMargin);
 			}
 
+			// --- NETTOYAGE ET REMISSION DE LA FORCE DE SECOURS ---
 			Steer.Z = 0.f;
+
+			// N'appliquer la force de relance QUE si le boid ne dort pas ET que sa vitesse est critique
+			if (S.CurrentBehaviorState != EBoidState::Sleeping)
+			{
+				// Si l'agent avance à moins de ~10 unités/s (Vitesse Squared < 100)
+				if (MyVel.SizeSquared() < 100.f) 
+				{
+					// On lui donne une petite impulsion vers l'avant s'il bougeait, 
+					// ou selon son angle de calcul pour le débloquer
+					FVector EscapeDir = bMoving ? Forward : FVector(FMath::Cos(S.WanderAngle), FMath::Sin(S.WanderAngle), 0.f);
+					Steer += EscapeDir * 0.4f; 
+				}
+			}
+
+			// Force finale propre : le steering reprend le contrôle total dès que le boid bouge !
 			Force[It].Value = Steer.GetClampedToMaxSize(1.f) * Evo::MaxSteerAccel;
 		}
 	});

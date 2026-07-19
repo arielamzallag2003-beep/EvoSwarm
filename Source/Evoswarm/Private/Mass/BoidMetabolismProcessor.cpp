@@ -52,7 +52,11 @@ void UBoidMetabolismProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 			// Harsher biomes (desert, highlands) burn food faster.
 			const FBiomeParams Biome = Evo::GetBiomeParams(Evo::BiomeAt(Pos.X, Pos.Y));
 			const float CarnivoreBurn = FMath::Lerp(1.f, Evo::CarnivoreHungerMult, Evo::MeatDigestion(G));
-			S.CurrentHunger -= Evo::HungerDrainPerSec * Biome.HungerDrainMultiplier * CarnivoreBurn * Dt;
+
+			// --- MODIFICATION : AJOUT DU FACTEUR DE CONSOMMATION AU REPOS ---
+			// Si le boid dort, son métabolisme ralentit (il consomme 4x moins de nourriture).
+			const float SleepingDrainModifier = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 0.25f : 1.0f;
+			S.CurrentHunger -= Evo::HungerDrainPerSec * Biome.HungerDrainMultiplier * CarnivoreBurn * SleepingDrainModifier * Dt;
 			if (S.CurrentHunger <= 0.f)
 			{
 				S.CurrentHunger = 0.f;
@@ -60,9 +64,11 @@ void UBoidMetabolismProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 			}
 			else
 			{
+				// --- MODIFICATION : AJOUT DU BOOST DE RÉGÉNÉRATION PENDANT LE SOMMEIL ---
+				// Le sommeil double le taux de régénération naturelle des points de vie.
+				const float SleepRegenBonus = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 2.0f : 1.0f;
 				S.CurrentHP = FMath::Min(Evo::MaxHP(G),
-					S.CurrentHP + G.Get(EBoidStat::Regeneration) * Evo::RegenPerSecScale * Dt);
-			}
+					S.CurrentHP + G.Get(EBoidStat::Regeneration) * Evo::RegenPerSecScale * SleepRegenBonus * Dt);}
 
 			if (S.CurrentHP <= 0.f || S.Age > Evo::Lifespan(G))
 			{

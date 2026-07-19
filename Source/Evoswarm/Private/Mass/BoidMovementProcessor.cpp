@@ -45,17 +45,61 @@ void UBoidMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			FBoidStateFragment& S = State[It];
 			FVector Loc = Xf[It].GetTransform().GetLocation();
 
+			// --- GESTION DE LA FATIGUE ET DU METABOLISME ---
+			if (S.CurrentBehaviorState == EBoidState::Sleeping)
+			{
+				// Récupération rapide de la fatigue et de la stamina au lit
+				S.CurrentFatigue = FMath::Max(0.f, S.CurrentFatigue - 0.15f * Dt);
+				S.CurrentStamina = FMath::Min(Evo::MaxStamina(G), S.CurrentStamina + (Evo::StaminaRegenPerSec * 3.f) * Dt);
+				
+				// Vitesse de déplacement nulle
+				Vel[It].Value = FVector::ZeroVector;
+				Force[It].Value = FVector::ZeroVector;
+
+				// On applique le déplacement d'ajustement au sol sans vitesse
+				Loc.Z = Evo::SurfaceZ(Loc.X, Loc.Y) + Evo::GroundOffset;
+				Xf[It].GetMutableTransform().SetLocation(Loc);
+
+				if (S.CurrentFatigue <= 0.f)
+				{
+					S.CurrentBehaviorState = EBoidState::Wandering;
+				}
+				
+				continue; // Passe au boid suivant
+			}
+
+			// Accumulation de la fatigue pour les boids éveillés
+			S.CurrentFatigue = FMath::Min(1.f, S.CurrentFatigue + 0.02f * Dt);
+
+			// Sanction d'épuisement extrême (HP déclinants si fatigue à 100%)
+			if (S.CurrentFatigue >= 1.f)
+			{
+				S.CurrentHP = FMath::Max(0.f, S.CurrentHP - 0.05f * Dt);
+			}
+
 			// Sprint when strongly driven (fleeing / chasing) and stamina remains.
 			const bool bWantSprint = Force[It].Value.SizeSquared() > FMath::Square(0.7f * Evo::MaxSteerAccel);
 			float MaxSpeed = Evo::WalkSpeed(G);
-			if (bWantSprint && S.CurrentStamina > 0.f)
+
+			// Un boid épuisé (Fatigue = 1.0) est incapable d'activer le sprint
+			const bool bCanSprint = (S.CurrentStamina > 0.f) && (S.CurrentFatigue < 1.f);
+			
+			if (bWantSprint && bCanSprint)
 			{
 				MaxSpeed = Evo::RunSpeed(G);
 				S.CurrentStamina = FMath::Max(0.f, S.CurrentStamina - Evo::StaminaDrainPerSec * Dt);
 			}
 			else
 			{
-				S.CurrentStamina = FMath::Min(Evo::MaxStamina(G), S.CurrentStamina + Evo::StaminaRegenPerSec * Dt);
+				// Régénération de la stamina normale (légèrement accrue si immobile)
+				const float RegenMultiplier = (Vel[It].Value.SizeSquared() < 1.f) ? 1.5f : 1.0f;
+				S.CurrentStamina = FMath::Min(Evo::MaxStamina(G), S.CurrentStamina + Evo::StaminaRegenPerSec * RegenMultiplier * Dt);
+			}
+
+			// Pénalité de léthargie : si la fatigue dépasse 80%, la vitesse de marche est divisée par 2
+			if (S.CurrentFatigue > 0.80f)
+			{
+				MaxSpeed *= 0.5f;
 			}
 
 			// Biome and adrenaline scale top speed; uphill travel is slower.

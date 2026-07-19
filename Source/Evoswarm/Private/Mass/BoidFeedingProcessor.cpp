@@ -51,6 +51,13 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 			FBoidStateFragment& S = State[It];
 			const float MaxHunger = Evo::MaxHunger(G);
 
+			// --- AJOUT : BLOCAGE DE L'ALIMENTATION PENDANT LE SOMMEIL ---
+			// Un boid endormi ne peut ni chasser, ni brouter, ni interagir avec la nourriture.
+			if (S.CurrentBehaviorState == EBoidState::Sleeping)
+			{
+				continue;
+			}
+			
 			// Plant-eaters graze the nearest plant (consumed whole).
 			if (Evo::CanEatPlants(G) && S.CurrentHunger < MaxHunger)
 			{
@@ -85,8 +92,12 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 				}
 			}
 
+			// --- MODIFICATION : CLASSIFICATION DES ÉTATS RESTRICTIFS POUR LA CHASSE ---
+			// Un boid ne doit pas attaquer s'il est en train de fuir pour sa vie ou de chercher un partenaire.
+			const bool bInRestrictiveState = (S.CurrentBehaviorState == EBoidState::Fleeing) || (S.CurrentBehaviorState == EBoidState::Mating);
+
 			// Live hunting: stamina-gated, pack-boosted; prey fights back; a kill drops a carcass.
-			if (Evo::CanHunt(G) && S.AttackCooldown <= 0.f && S.CurrentStamina >= Evo::MinStaminaToAttack)
+			if (Evo::CanHunt(G) && S.AttackCooldown <= 0.f && S.CurrentStamina >= Evo::MinStaminaToAttack && !bInRestrictiveState)
 			{
 				FMassEntityHandle PreyHandle;
 				FVector PreyPos = FVector::ZeroVector;

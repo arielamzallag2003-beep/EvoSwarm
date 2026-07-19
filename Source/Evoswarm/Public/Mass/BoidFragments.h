@@ -9,6 +9,7 @@
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
 #include "BoidStats.h"
+#include "MassEntityHandle.h"
 #include "BoidFragments.generated.h"
 
 class USpeciesConfig;
@@ -80,6 +81,10 @@ struct EVOSWARM_API FBoidStateFragment : public FMassFragment
 	
 	/** Cache du score d'attractivité du partenaire ciblé */
 	float TargetPartnerAttractiveness = 0.f;
+	
+	// --- AJOUT POUR LE DEBUG PERFORMANCE ---
+	FVector LastTargetPreyPos = FVector::ZeroVector;
+	bool bDebugHasPrey = false;
 };
 
 /** What kind of food an entity is. */
