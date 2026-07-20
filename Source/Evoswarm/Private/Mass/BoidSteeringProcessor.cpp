@@ -191,22 +191,34 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			// et on distribue proprement les comportements dans des embranchements "else if" distincts.
 			FVector Steer = Separation * Evo::SeparationWeight;
 			
+			// Calcul de la poussée d'errance par défaut (Smooth Wander)
+			S.WanderAngle += Rng.FRandRange(-1.f, 1.f) * WanderDrift;
+			const FVector WanderSteer = FVector(FMath::Cos(S.WanderAngle), FMath::Sin(S.WanderAngle), 0.f) * (Evo::WanderAccel / Evo::MaxSteerAccel);
+			
 			if (S.CurrentBehaviorState == EBoidState::Fleeing)
 			{
 				// La force de séparation est accrue en fuite pour éviter les embouteillages fatals devant les prédateurs.
 				//Steer = Separation * (Evo::SeparationWeight * 1.5f);
-				Steer = Separation * (Evo::SeparationWeight * 1.0f);
+				//Steer = Separation * (Evo::SeparationWeight * 1.0f);
 				Steer += FleeSum * Evo::FleeWeight;
+				
+				// FALLBACK : Si le boid est en fuite mais qu'il n'a plus de direction de fuite claire
+				if (Steer.IsNearlyZero())
+				{
+					Steer += WanderSteer;
+				}
 			}
 			else if (S.CurrentBehaviorState == EBoidState::Foraging)
 			{
+				bool bHasAnyTarget = false;
+				
 				// Alignement et cohésion réduits en recherche de nourriture pour favoriser l'autonomie individuelle.
 				if (FlockWeight > KINDA_SMALL_NUMBER)
 				{
 					const FVector AvgVel = AlignSum / FlockWeight;
 					const FVector AvgPos = CohesionSum / FlockWeight;
-					Steer += (AvgVel - MyVel).GetSafeNormal() * (Evo::AlignmentWeight * 0.25f);
-					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration) * 0.25f);
+					Steer += (AvgVel - MyVel).GetSafeNormal() * (Evo::AlignmentWeight * 0.9f);
+					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration) * 0.9f);
 				}
 
 				if (Evo::CanEatPlants(G) && Need > 0.f)
@@ -215,6 +227,7 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					if (Grid->FindNearestFood(Pos, Radius, EFoodType::Plant, Food))
 					{
 						Steer += (Food.Position - Pos).GetSafeNormal() * (Evo::SeekFoodWeight * Need * Evo::PlantDigestion(G));
+						bHasAnyTarget = true;
 					}
 				}
 
@@ -224,6 +237,7 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					if (Grid->FindNearestFood(Pos, Radius, EFoodType::Carcass, Carcass))
 					{
 						Steer += (Carcass.Position - Pos).GetSafeNormal() * (Evo::SeekFoodWeight * Need * Evo::MeatDigestion(G));
+						bHasAnyTarget = true;
 					}
 				}
 
@@ -235,11 +249,19 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					// --- AJOUT : On mémorise le résultat pour le processeur de débug ---
 					S.bDebugHasPrey = bHasPrey;
 					S.LastTargetPreyPos = NearestPrey;
+					bHasAnyTarget = true;
 				}
 				else
 				{
 					// Indispensable pour couper le dessin dès que la proie s'échappe ou meurt
 					S.bDebugHasPrey = false; 
+				}
+				
+				// FALLBACK : Si le boid cherche à manger mais ne voit absolument AUCUNE nourriture/proie autour
+				// Il continue d'avancer et de patrouiller au lieu de s'arrêter net sur place !
+				if (!bHasAnyTarget)
+				{
+					Steer += WanderSteer;
 				}
 			}
 			// =========================================================================
@@ -247,13 +269,15 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			// =========================================================================
 			else if (S.CurrentBehaviorState == EBoidState::Mating)
 			{
+				bool bHasPartnerTarget = false;
+				
 				// Alignement et cohésion modérés pour ne pas perturber l'approche directe du couple
 				if (FlockWeight > KINDA_SMALL_NUMBER)
 				{
 					const FVector AvgVel = AlignSum / FlockWeight;
 					const FVector AvgPos = CohesionSum / FlockWeight;
-					Steer += (AvgVel - MyVel).GetSafeNormal() * (Evo::AlignmentWeight * 0.5f);
-					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration) * 0.5f);
+					Steer += (AvgVel - MyVel).GetSafeNormal() * (Evo::AlignmentWeight * 0.95f);
+					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration) * 0.95f);
 				}
 
 				// Si le partenaire mémorisé est structurellement et globalement en vie dans le monde
@@ -264,7 +288,14 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					{
 						const FVector PartnerPos = PartnerXf->GetTransform().GetLocation();
 						Steer += (PartnerPos - Pos).GetSafeNormal() * Evo::SeekPartnerWeight;
+						bHasPartnerTarget = true;
 					}
+				}
+				
+				// FALLBACK : Si le partenaire est perdu ou invalide
+				if (!bHasPartnerTarget)
+				{
+					Steer += WanderSteer;
 				}
 			}
 			// =========================================================================
