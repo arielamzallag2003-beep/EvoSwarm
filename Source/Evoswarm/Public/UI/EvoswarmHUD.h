@@ -1,8 +1,9 @@
 // Copyright Evoswarm.
 //
-// A lightweight canvas HUD that reads the sim subsystem's live stats and draws a
-// per-species panel: population bar + population-averaged genome values, plus global
-// totals and the food count. No UMG assets required.
+// The HUD actor. It no longer draws anything itself: it constructs the Slate ecosystem
+// panel (SEvoswarmHUD) once, adds it to the viewport, and removes it on teardown. All the
+// rendering, layout and ~10 Hz refresh live in the Slate widget, which reads the sim
+// subsystem's live-stats data layer directly. No UMG assets required.
 
 #pragma once
 
@@ -10,11 +11,18 @@
 #include "GameFramework/HUD.h"
 #include "EvoswarmHUD.generated.h"
 
+class SEvoswarmHUD;
+
 UCLASS()
 class EVOSWARM_API AEvoswarmHUD : public AHUD
 {
 	GENERATED_BODY()
 
 public:
-	virtual void DrawHUD() override;
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+private:
+	/** The Slate panel, added to the viewport for the lifetime of play. */
+	TSharedPtr<SEvoswarmHUD> HudWidget;
 };
