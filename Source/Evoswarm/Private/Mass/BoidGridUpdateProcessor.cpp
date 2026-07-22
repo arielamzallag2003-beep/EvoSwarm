@@ -67,7 +67,7 @@ void UBoidGridUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 			Agent.Diet = G.Get(EBoidStat::Diet);
 			Agent.Intimidation = G.Get(EBoidStat::Intimidation);
 			Agent.bCanMate = (S.Age >= Evo::MaturityAge) && (S.ReproCooldown <= 0.f)
-				&& (S.CurrentHunger >= Evo::ReproHungerFraction * Evo::MaxHunger(G)) && (S.CurrentFatigue < 0.8f);
+				&& (S.CurrentHunger >= Evo::ReproHungerFraction * Evo::MaxHunger(G)) && (Evo::Fatigue(G, S.CurrentStamina) < Evo::MateMaxFatigue);
 			// Attractiveness is based on health, age and reproduction count
 			// so mate choice toward high attractiveness favours successful genomes.
 			Agent.Attractiveness = FBoidGenomeLibrary::ComputeAttractivenessScore(G, S);

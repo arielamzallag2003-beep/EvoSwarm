@@ -44,21 +44,18 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 			const TConstArrayView<FBoidGenomeFragment> Gen = Context.GetFragmentView<FBoidGenomeFragment>();
 			const TArrayView<FBoidStateFragment> State = Context.GetMutableFragmentView<FBoidStateFragment>();
 
-			// --- AJOUT : BLOCAGE DE L'ALIMENTATION PENDANT LE SOMMEIL ---
-			// Un boid endormi ne peut ni chasser, ni brouter, ni interagir avec la nourriture.
-			if (S.CurrentBehaviorState == EBoidState::Sleeping)
-			{
-				continue;
-			}
-			
-			// Plant-eaters graze the nearest plant (consumed whole).
-			if (Evo::CanEatPlants(G) && S.CurrentHunger < MaxHunger)
 			for (FMassExecutionContext::FEntityIterator It = Context.CreateEntityIterator(); It; ++It)
 			{
 				const FBoidGenome& G = Gen[It].Genome;
 				const FVector Pos = Xf[It].GetTransform().GetLocation();
 				FBoidStateFragment& S = State[It];
 				const float MaxHunger = Evo::MaxHunger(G);
+
+				// A sleeping boid neither grazes, scavenges nor hunts.
+				if (S.CurrentBehaviorState == EBoidState::Sleeping)
+				{
+					continue;
+				}
 
 				// Plant-eaters graze the nearest plant (consumed whole).
 				if (Evo::CanEatPlants(G) && S.CurrentHunger < MaxHunger)
@@ -74,20 +71,6 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 						}
 					}
 				}
-			}
-
-			// --- MODIFICATION : CLASSIFICATION DES ÉTATS RESTRICTIFS POUR LA CHASSE ---
-			// Un boid ne doit pas attaquer s'il est en train de fuir pour sa vie ou de chercher un partenaire.
-			const bool bInRestrictiveState = (S.CurrentBehaviorState == EBoidState::Fleeing) || (S.CurrentBehaviorState == EBoidState::Mating);
-
-			// Live hunting: stamina-gated, pack-boosted; prey fights back; a kill drops a carcass.
-			if (Evo::CanHunt(G) && S.AttackCooldown <= 0.f && S.CurrentStamina >= Evo::MinStaminaToAttack && !bInRestrictiveState)
-			{
-				FMassEntityHandle PreyHandle;
-				FVector PreyPos = FVector::ZeroVector;
-				float BestDistSq = TNumericLimits<float>::Max();
-				bool bFound = false;
-					const float SelfMeat = Evo::MeatDigestion(G); // our place on the carnivory scale
 
 				// Meat-eaters scavenge carcasses: take a bite, sharing it over time (packs feed together).
 				if (Evo::CanHunt(G) && S.CurrentHunger < MaxHunger)
@@ -108,8 +91,14 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 					}
 				}
 
+				// A boid running for its life or courting a partner does not start a fight.
+				const bool bInRestrictiveState =
+					(S.CurrentBehaviorState == EBoidState::Fleeing) ||
+					(S.CurrentBehaviorState == EBoidState::Mating);
+
 				// Live hunting: stamina-gated, pack-boosted; prey fights back; a kill drops a carcass.
-				if (Evo::CanHunt(G) && S.AttackCooldown <= 0.f && S.CurrentStamina >= Evo::MinStaminaToAttack)
+				if (Evo::CanHunt(G) && !bInRestrictiveState
+					&& S.AttackCooldown <= 0.f && S.CurrentStamina >= Evo::MinStaminaToAttack)
 				{
 					FMassEntityHandle PreyHandle;
 					FVector PreyPos = FVector::ZeroVector;
@@ -163,6 +152,12 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 							const float Defense = PreyGen->Genome.Get(EBoidStat::Armor) * Evo::ArmorScale;
 							PreySt->CurrentHP -= FMath::Max(1.f, Attack - Defense);
 							PreySt->Adrenaline = Evo::AdrenalineDuration; // prey bolts
+
+							// Being attacked wakes the prey up.
+							if (PreySt->CurrentBehaviorState == EBoidState::Sleeping)
+							{
+								PreySt->CurrentBehaviorState = EBoidState::Fleeing;
+							}
 
 							// Prey fights back, scaled by its Aggressiveness.
 							const float PreyAggr = FMath::Clamp(PreyGen->Genome.Get(EBoidStat::Aggressiveness) * 0.08f, 0.f, 1.f);

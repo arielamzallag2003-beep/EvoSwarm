@@ -42,31 +42,12 @@ void UBoidMetabolismProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 			const TConstArrayView<FBoidGenomeFragment> Gen = Context.GetFragmentView<FBoidGenomeFragment>();
 			const TArrayView<FBoidStateFragment> State = Context.GetMutableFragmentView<FBoidStateFragment>();
 
-			// Harsher biomes (desert, highlands) burn food faster.
-			const FBiomeParams Biome = Evo::GetBiomeParams(Evo::BiomeAt(Pos.X, Pos.Y));
-			const float CarnivoreBurn = FMath::Lerp(1.f, Evo::CarnivoreHungerMult, Evo::MeatDigestion(G));
-
-			// --- MODIFICATION : AJOUT DU FACTEUR DE CONSOMMATION AU REPOS ---
-			// Si le boid dort, son mÃ©tabolisme ralentit (il consomme 4x moins de nourriture).
-			const float SleepingDrainModifier = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 0.25f : 1.0f;
-			S.CurrentHunger -= Evo::HungerDrainPerSec * Biome.HungerDrainMultiplier * CarnivoreBurn * SleepingDrainModifier * Dt;
-			if (S.CurrentHunger <= 0.f)
-			{
-				S.CurrentHunger = 0.f;
-				S.CurrentHP -= Evo::StarvationDamagePerSec * Dt; // starving
-			}
-			else
-			{
-				// --- MODIFICATION : AJOUT DU BOOST DE RÃ‰GÃ‰NÃ‰RATION PENDANT LE SOMMEIL ---
-				// Le sommeil double le taux de régénération naturelle des points de vie.
-				const float SleepRegenBonus = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 2.0f : 1.0f;
-				S.CurrentHP = FMath::Min(Evo::MaxHP(G),
-					S.CurrentHP + G.Get(EBoidStat::Regeneration) * Evo::RegenPerSecScale * SleepRegenBonus * Dt);}
 			for (FMassExecutionContext::FEntityIterator It = Context.CreateEntityIterator(); It; ++It)
 			{
 				const FBoidGenome& G = Gen[It].Genome;
 				FBoidStateFragment& S = State[It];
 				const FVector Pos = Xf[It].GetTransform().GetLocation();
+				const bool bAsleep = (S.CurrentBehaviorState == EBoidState::Sleeping);
 
 				S.Age += Dt;
 				S.ReproCooldown = FMath::Max(0.f, S.ReproCooldown - Dt);
@@ -76,7 +57,11 @@ void UBoidMetabolismProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 				// Harsher biomes (desert, highlands) burn food faster.
 				const FBiomeParams Biome = Evo::GetBiomeParams(Evo::BiomeAt(Pos.X, Pos.Y));
 				const float CarnivoreBurn = FMath::Lerp(1.f, Evo::CarnivoreHungerMult, Evo::MeatDigestion(G));
-				S.CurrentHunger -= Evo::HungerDrainPerSec * Biome.HungerDrainMultiplier * CarnivoreBurn * Dt;
+
+				// Sleeping slows the metabolism right down (a quarter of the food burn).
+				const float SleepDrainMult = bAsleep ? Evo::SleepHungerDrainMult : 1.f;
+				S.CurrentHunger -= Evo::HungerDrainPerSec * Biome.HungerDrainMultiplier * CarnivoreBurn * SleepDrainMult * Dt;
+
 				if (S.CurrentHunger <= 0.f)
 				{
 					S.CurrentHunger = 0.f;
@@ -84,8 +69,10 @@ void UBoidMetabolismProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 				}
 				else
 				{
+					// ... and doubles natural healing.
+					const float SleepRegenMult = bAsleep ? Evo::SleepRegenMult : 1.f;
 					S.CurrentHP = FMath::Min(Evo::MaxHP(G),
-						S.CurrentHP + G.Get(EBoidStat::Regeneration) * Evo::RegenPerSecScale * Dt);
+						S.CurrentHP + G.Get(EBoidStat::Regeneration) * Evo::RegenPerSecScale * SleepRegenMult * Dt);
 				}
 
 				if (S.CurrentHP <= 0.f || S.Age > Evo::Lifespan(G))
@@ -99,7 +86,7 @@ void UBoidMetabolismProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 						{
 							// Classify: HP gone with an empty stomach = starvation; HP gone while fed =
 							// combat wounds (attacks / counter-attacks earlier); otherwise it was old age.
-							// (Boids EATEN outright never get here — the feeding processor claims them
+							// (Boids EATEN outright never get here -- the feeding processor claims them
 							// and reports the kill itself, so there's no double counting.)
 							EDeathCause Cause;
 							if (S.CurrentHP <= 0.f)

@@ -187,15 +187,12 @@ public:
 	/** Enable food regrowth + birth flushing. The game mode calls this once the world is built. */
 	void StartSimulation() { bRunning = true; }
 
-	// --- Debug visualisation (toggled by a key) ---
+	// --- Debug visualisation (B toggles it on/off, numpad 0-4 picks the overlay) ---
 	void ToggleDebugDraw() { bDebugDraw = !bDebugDraw; }
 	bool IsDebugDraw() const { return bDebugDraw; }
-	/** Définit directement le mode de debug (0 à 4) */
-	UFUNCTION(BlueprintCallable, Category = "Evoswarm|Debug")
-	void SetDebugMode(int32 NewMode);
 
-	/** Récupère le mode de debug actuel */
-	UFUNCTION(BlueprintPure, Category = "Evoswarm|Debug")
+	/** 0 = markers, 1 = perception, 2 = behaviour state, 3 = vitals, 4 = everything. */
+	void SetDebugMode(int32 NewMode);
 	int32 GetDebugMode() const { return CurrentDebugMode; }
 
 	// --- Spawning (safe: invoked outside Mass processing) ---
@@ -269,13 +266,10 @@ private:
 	int32 FoodCount = 0;
 	bool bRunning = false;
 	bool bDebugDraw = false;
+	int32 CurrentDebugMode = 0;
 
 	float ElapsedTime = 0.f;       // seconds since the sim started
 	float HistoryTimer = 0.f;      // accumulator for population sampling
-	
-	/** Mode de debug actif (0: Off, 1: Comportements/FSM, 2: Espèces/Perceptions, 3: ..., 4: ...) */
-	int32 CurrentDebugMode = 0;
-};
 
 	FBoidInspectState Inspect;
 };

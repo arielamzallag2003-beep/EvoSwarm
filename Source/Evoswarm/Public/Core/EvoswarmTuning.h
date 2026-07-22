@@ -39,6 +39,16 @@ namespace Evo
 	inline constexpr float StaminaDrainPerSec = 12.f;  // stamina burned per second sprinting
 	inline constexpr float StaminaRegenPerSec = 8.f;   // stamina recovered per second cruising
 
+	// --- Rest / sleep ---
+	// A boid that is safe and fed but exhausted lies down to recover. Hysteresis on stamina
+	// keeps it from flickering in and out of sleep every frame.
+	inline constexpr float SleepEnterStaminaFrac = 0.15f; // drops asleep below this fraction of max stamina
+	inline constexpr float SleepWakeStaminaFrac = 0.85f;  // wakes once recovered past this fraction
+	inline constexpr float SleepMinHungerFrac = 0.25f;    // too hungry to sleep below this fraction of max hunger
+	inline constexpr float SleepHungerDrainMult = 0.25f;  // resting burns a quarter of the food
+	inline constexpr float SleepRegenMult = 2.0f;         // and heals twice as fast
+	inline constexpr float SleepStaminaRegenMult = 2.5f;  // stamina comes back faster lying down
+
 	// --- Reproduction ---
 	inline constexpr float MaturityAge = 3.f;   // min seconds before breeding
 	inline constexpr float ReproHungerFraction = 0.72f; // fraction of max hunger required to breed
@@ -46,6 +56,7 @@ namespace Evo
 	inline constexpr float ReproCooldownBase = 12.f; // seconds between births at ReproductionRate 0
 	inline constexpr float ReproRateScale = 0.6f; // higher ReproductionRate shortens the cooldown
 	inline constexpr float MatingRadius = 700.f;// how close a ready partner must be to breed
+	inline constexpr float MateMaxFatigue = 0.8f;// too exhausted to court above this fatigue level
 
 	// --- Genetic algorithm (offspring stat reallocation at birth) ---
 	inline constexpr float ReallocStepsScale = 30.f; // mutation steps = 1 + MutationRate * this
@@ -59,16 +70,16 @@ namespace Evo
 	inline constexpr float DietEfficiencyFloor = 0.1f;
 
 	// --- Flocking weights ---
-	inline constexpr float SeparationRadius     = 350.f;
-	inline constexpr float SeparationWeight     = 1.6f;
-	inline constexpr float AlignmentWeight      = 1.0f;
-	inline constexpr float CohesionWeightScale  = 0.06f; // multiplied by the Integration stat (lower = less clumping)
-	inline constexpr float FleeWeight           = 4.5f;
-	inline constexpr float ChaseWeightScale     = 0.5f;  // multiplied by the Aggressiveness stat
-	inline constexpr float SeekFoodWeight       = 2.5f;  // herbivore pull toward food, scaled by hunger
-	inline constexpr float SeekPartnerWeight	= 2.5f;
-	inline constexpr float MaxSteerAccel        = 3000.f;
-	inline constexpr float WanderAccel          = 600.f;
+	inline constexpr float SeparationRadius = 350.f;
+	inline constexpr float SeparationWeight = 1.6f;
+	inline constexpr float AlignmentWeight = 1.0f;
+	inline constexpr float CohesionWeightScale = 0.06f; // multiplied by the Integration stat (lower = less clumping)
+	inline constexpr float FleeWeight = 4.5f;
+	inline constexpr float ChaseWeightScale = 0.5f;  // multiplied by the Aggressiveness stat
+	inline constexpr float SeekFoodWeight = 2.5f;  // herbivore pull toward food, scaled by hunger
+	inline constexpr float SeekPartnerWeight = 2.5f;
+	inline constexpr float MaxSteerAccel = 3000.f;
+	inline constexpr float WanderAccel = 600.f;
 
 	// --- Water (land boids avoid it, and wade slowly if they enter) ---
 	inline constexpr float WaterLookAhead = 450.f;  // how far ahead a boid checks for water
@@ -166,6 +177,16 @@ namespace Evo
 	inline float RunSpeed(const FBoidGenome& G) { return FMath::Max(WalkSpeed(G), G.Get(EBoidStat::RunSpeed) * RunSpeedScale); }
 	inline float PerceptionRadius(const FBoidGenome& G) { return FMath::Max(100.f, G.Get(EBoidStat::Perception) * PerceptionScale); }
 	inline float Lifespan(const FBoidGenome& G) { return FMath::Max(5.f, G.Get(EBoidStat::Lifespan) * LifespanScale); }
+
+	/**
+	 * Exhaustion in [0,1]: 0 = fully rested, 1 = spent. Derived from stamina rather than
+	 * stored, so there is only ever one thing to keep up to date (the movement processor
+	 * already drains and regenerates stamina, and sleep restores it faster).
+	 */
+	inline float Fatigue(const FBoidGenome& G, float CurrentStamina)
+	{
+		return FMath::Clamp(1.f - CurrentStamina / MaxStamina(G), 0.f, 1.f);
+	}
 	inline float ReproCooldown(const FBoidGenome& G)
 	{
 		return ReproCooldownBase / (1.f + FMath::Max(0.f, G.Get(EBoidStat::ReproductionRate)) * ReproRateScale);

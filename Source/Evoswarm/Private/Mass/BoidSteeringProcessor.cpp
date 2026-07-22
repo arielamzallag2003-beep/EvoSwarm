@@ -39,187 +39,184 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(Context, [this, Grid, &EntityManager](FMassExecutionContext& ChunkContext)
-	{
-		const float Dt = ChunkContext.GetDeltaTimeSeconds();
-		const float CosHalfFOV = FMath::Cos(FMath::DegreesToRadians(Evo::PerceptionFOVDegrees * 0.5f));
-		const float WanderDrift = FMath::DegreesToRadians(Evo::WanderDriftDegPerSec) * Dt;
-
-		const FBoidSpeciesSharedFragment& Species = ChunkContext.GetSharedFragment<FBoidSpeciesSharedFragment>();
-		const TConstArrayView<FTransformFragment> Xf = ChunkContext.GetFragmentView<FTransformFragment>();
-		const TConstArrayView<FMassVelocityFragment> Vel = ChunkContext.GetFragmentView<FMassVelocityFragment>();
-		const TArrayView<FMassForceFragment> Force = ChunkContext.GetMutableFragmentView<FMassForceFragment>();
-		const TConstArrayView<FBoidGenomeFragment> Gen = ChunkContext.GetFragmentView<FBoidGenomeFragment>();
-		const TArrayView<FBoidStateFragment> States = ChunkContext.GetMutableFragmentView<FBoidStateFragment>();
-
-		for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+	EntityQuery.ForEachEntityChunk(Context, [this, Grid](FMassExecutionContext& Context)
 		{
-			const FBoidGenome& G = Gen[It].Genome;
-			FBoidStateFragment& S = States[It];
-			const FVector Pos = Xf[It].GetTransform().GetLocation();
-			const FVector MyVel = Vel[It].Value;
-			const FMassEntityHandle Self = ChunkContext.GetEntity(It);
+			const float Dt = Context.GetDeltaTimeSeconds();
+			const float CosHalfFOV = FMath::Cos(FMath::DegreesToRadians(Evo::PerceptionFOVDegrees * 0.5f));
+			const float WanderDrift = FMath::DegreesToRadians(Evo::WanderDriftDegPerSec) * Dt;
 
-			const FBiomeParams SelfBiome = Evo::GetBiomeParams(Evo::BiomeAt(Pos.X, Pos.Y));
-			
-			// Si le boid dort, son rayon de perception est divisé par 10 (vulnérabilité accrue)
-			const float PerceptionScale = (S.CurrentBehaviorState == EBoidState::Sleeping) ? 0.5f : 1.f;
-			const float Radius = Evo::PerceptionRadius(G) * SelfBiome.PerceptionMultiplier * PerceptionScale;
-			const float Need = 1.f - FMath::Clamp(S.CurrentHunger / Evo::MaxHunger(G), 0.f, 1.f);
-			
-			// Si le boid dort, on ignore les forces de déplacement physiques
-			if (S.CurrentBehaviorState == EBoidState::Sleeping)
+			const FBoidSpeciesSharedFragment& Species = Context.GetSharedFragment<FBoidSpeciesSharedFragment>();
+			const TConstArrayView<FTransformFragment> Xf = Context.GetFragmentView<FTransformFragment>();
+			const TConstArrayView<FMassVelocityFragment> Vel = Context.GetFragmentView<FMassVelocityFragment>();
+			const TArrayView<FMassForceFragment> Force = Context.GetMutableFragmentView<FMassForceFragment>();
+			const TConstArrayView<FBoidGenomeFragment> Gen = Context.GetFragmentView<FBoidGenomeFragment>();
+			const TArrayView<FBoidStateFragment> States = Context.GetMutableFragmentView<FBoidStateFragment>();
+
+			for (FMassExecutionContext::FEntityIterator It = Context.CreateEntityIterator(); It; ++It)
 			{
-				Force[It].Value = FVector::ZeroVector;
-				continue;
-			}
-			
-			// Field of view: only perceive what's roughly ahead. A still boid sees all around.
-			const bool bMoving = MyVel.SizeSquared() > 1.f;
-			const FVector Forward = bMoving ? MyVel.GetSafeNormal() : FVector::ZeroVector;
+				const FBoidGenome& G = Gen[It].Genome;
+				FBoidStateFragment& S = States[It];
+				const FVector Pos = Xf[It].GetTransform().GetLocation();
+				const FVector MyVel = Vel[It].Value;
+				const FMassEntityHandle Self = Context.GetEntity(It);
 
-			FVector Separation = FVector::ZeroVector;
-			FVector AlignSum = FVector::ZeroVector;
-			FVector CohesionSum = FVector::ZeroVector;
-			FVector FleeSum = FVector::ZeroVector;
-			float FlockWeight = 0.f;
-			FVector NearestPrey = FVector::ZeroVector;
-			float BestPreyDistSq = TNumericLimits<float>::Max();
-			bool bHasPrey = false;
+				const FBiomeParams SelfBiome = Evo::GetBiomeParams(Evo::BiomeAt(Pos.X, Pos.Y));
+				const float Radius = Evo::PerceptionRadius(G) * SelfBiome.PerceptionMultiplier;
+				const float Need = 1.f - FMath::Clamp(S.CurrentHunger / Evo::MaxHunger(G), 0.f, 1.f);
 
-			const bool bCanHunt = Evo::CanHunt(G);
+				// Field of view: only perceive what's roughly ahead. A still boid sees all around.
+				const bool bMoving = MyVel.SizeSquared() > 1.f;
+				const FVector Forward = bMoving ? MyVel.GetSafeNormal() : FVector::ZeroVector;
 
-			float TotalThreatWeight = 0.f; // --- AJOUT : Accumulateur de menace ---
+				FVector Separation = FVector::ZeroVector;
+				FVector AlignSum = FVector::ZeroVector;
+				FVector CohesionSum = FVector::ZeroVector;
+				FVector FleeSum = FVector::ZeroVector;
+				float FlockWeight = 0.f;
+				FVector NearestPrey = FVector::ZeroVector;
+				float BestPreyDistSq = TNumericLimits<float>::Max();
+				bool bHasPrey = false;
 
-			Grid->QueryAgents(Pos, Radius, [&](const FGridAgent& Other)
-			{
-				if (Other.Entity == Self)
-				{
-					return;
-				}
-				const FVector Delta = Other.Position - Pos;
-				const float Dist = Delta.Size() + KINDA_SMALL_NUMBER;
-				const FVector Dir = Delta / Dist;
+				const bool bCanHunt = Evo::CanHunt(G);
+				const float SelfMeat = Evo::MeatDigestion(G); // our own place on the carnivory scale
 
-				// Outside the forward field of view -> not perceived (reduces confusion).
-				if (bMoving && FVector::DotProduct(Forward, Dir) < CosHalfFOV)
-				{
-					return;
-				}
+				// Is this individual currently in the market for a partner? Same test the
+				// reproduction processor uses, so the state never disagrees with the outcome.
+				const bool bWantsMate = (S.Age >= Evo::MaturityAge)
+					&& (S.ReproCooldown <= 0.f)
+					&& (S.CurrentHunger >= Evo::ReproHungerFraction * Evo::MaxHunger(G));
 
-				// Closer neighbours matter more (smooth distance falloff).
-				const float Weight = FMath::Clamp(1.f - Dist / Radius, 0.f, 1.f);
+				FVector MatePos = FVector::ZeroVector;
+				float BestMateScore = -1.f;
+				bool bHasMate = false;
 
-				if (Other.SpeciesIndex == Species.SpeciesIndex)
-				{
-					if (Dist < Evo::SeparationRadius)
+				// A "predator" is something clearly ABOVE us on the carnivory scale, not merely
+				// something that eats meat -- otherwise an omnivore prey would scare its own hunter.
+				bool bPredatorNearby = false;
+
+				Grid->QueryAgents(Pos, Radius, [&](const FGridAgent& Other)
 					{
-						Separation -= Dir * ((Evo::SeparationRadius - Dist) / Evo::SeparationRadius);
-					}
-					AlignSum += Other.Velocity * Weight;
-					CohesionSum += Other.Position * Weight;
-					FlockWeight += Weight;
-				}
-				else
-				{
-					const float Threat = Evo::MeatDigestionFromDiet(Other.Diet);
-					if (Threat > Evo::DietEfficiencyFloor)
-					{
-						const float Awareness = FMath::Clamp(1.f - Other.Stealth * 0.5f, 0.f, 1.f);
-						const float Fear = 1.f + Other.Intimidation * Evo::IntimidationFleeScale;
-						// On accumule la menace brute reçue pour évaluer le danger global
-						TotalThreatWeight += Threat * Weight * Fear;
-
-						// La force de fuite nous pousse à l'OPPOSÉ du danger
-						FleeSum -= Dir * (Awareness * Fear * Threat * Weight);
-					}
-					if (bCanHunt)
-					{
-						const float DistSq = Dist * Dist;
-						if (DistSq < BestPreyDistSq)
+						if (Other.Entity == Self)
 						{
-							BestPreyDistSq = DistSq;
-							NearestPrey = Other.Position;
-							bHasPrey = true;
+							return;
 						}
+						const FVector Delta = Other.Position - Pos;
+						const float Dist = Delta.Size() + KINDA_SMALL_NUMBER;
+						const FVector Dir = Delta / Dist;
+
+						// Outside the forward field of view -> not perceived (reduces confusion).
+						if (bMoving && FVector::DotProduct(Forward, Dir) < CosHalfFOV)
+						{
+							return;
+						}
+
+						// Closer neighbours matter more (smooth distance falloff).
+						const float Weight = FMath::Clamp(1.f - Dist / Radius, 0.f, 1.f);
+
+						if (Other.SpeciesIndex == Species.SpeciesIndex)
+						{
+							if (Dist < Evo::SeparationRadius)
+							{
+								Separation -= Dir * ((Evo::SeparationRadius - Dist) / Evo::SeparationRadius);
+							}
+							AlignSum += Other.Velocity * Weight;
+							CohesionSum += Other.Position * Weight;
+							FlockWeight += Weight;
+
+							// Sexual selection at the steering level: head for the most attractive
+							// available partner in range, so pairs actually meet before breeding.
+							if (bWantsMate && Other.bCanMate && Other.Attractiveness > BestMateScore)
+							{
+								BestMateScore = Other.Attractiveness;
+								MatePos = Other.Position;
+								bHasMate = true;
+							}
+						}
+						else
+						{
+							const float Threat = Evo::MeatDigestionFromDiet(Other.Diet);
+							if (Threat > SelfMeat + Evo::HuntTierMargin)
+							{
+								bPredatorNearby = true; // this one could actually eat us
+							}
+							if (Threat > Evo::DietEfficiencyFloor)
+							{
+								const float Awareness = FMath::Clamp(1.f - Other.Stealth * 0.5f, 0.f, 1.f);
+								const float Fear = 1.f + Other.Intimidation * Evo::IntimidationFleeScale;
+								FleeSum -= Dir * (Awareness * Fear * Threat * Weight);
+							}
+							if (bCanHunt)
+							{
+								const float DistSq = Dist * Dist;
+								if (DistSq < BestPreyDistSq)
+								{
+									BestPreyDistSq = DistSq;
+									NearestPrey = Other.Position;
+									bHasPrey = true;
+								}
+							}
+						}
+					});
+
+				// ---- Behaviour state ------------------------------------------------
+				// Single source of truth for CurrentBehaviorState. Strict priority: staying alive
+				// beats resting, resting beats breeding, breeding beats eating, eating beats idling.
+				{
+					const float MaxStam = Evo::MaxStamina(G);
+					const bool bThreatened = bPredatorNearby || (S.Adrenaline > 0.f);
+					const bool bTooHungryToSleep = S.CurrentHunger < Evo::SleepMinHungerFrac * Evo::MaxHunger(G);
+					const bool bWasAsleep = (S.CurrentBehaviorState == EBoidState::Sleeping);
+
+					// Hysteresis: drop off below the enter threshold, stay down until well rested.
+					const float SleepThreshold = bWasAsleep ? Evo::SleepWakeStaminaFrac : Evo::SleepEnterStaminaFrac;
+					const bool bWantsSleep = !bThreatened && !bTooHungryToSleep
+						&& (S.CurrentStamina < SleepThreshold * MaxStam);
+
+					if (bThreatened)
+					{
+						S.CurrentBehaviorState = EBoidState::Fleeing;
+					}
+					else if (bWantsSleep)
+					{
+						S.CurrentBehaviorState = EBoidState::Sleeping;
+					}
+					else if (bWantsMate && bHasMate)
+					{
+						S.CurrentBehaviorState = EBoidState::Mating;
+					}
+					else if (bHasPrey && Need > 0.f)
+					{
+						S.CurrentBehaviorState = EBoidState::Hunting;
+					}
+					else if (Need > 0.f)
+					{
+						S.CurrentBehaviorState = EBoidState::Foraging;
+					}
+					else
+					{
+						S.CurrentBehaviorState = EBoidState::Wandering;
 					}
 				}
-			});
-			
-			// --- MACHINE A ETATS (FSM) : TRANSITIONS DE L'AGENT ---
-			// Tu peux ajuster le seuil (ici 0.6f). Plus il est haut, plus le boid est courageux.
-			const float FearThreshold = 0.8f; 
-			if (TotalThreatWeight > FearThreshold)
-			{
-				S.CurrentBehaviorState = EBoidState::Fleeing;
-			}
-			else
-			{
-				if (S.CurrentBehaviorState == EBoidState::Fleeing)
+
+				// A sleeping boid produces no steering force at all; the movement processor
+				// pins it in place and recovers its stamina.
+				if (S.CurrentBehaviorState == EBoidState::Sleeping)
 				{
-					S.CurrentBehaviorState = EBoidState::Wandering;
+					Force[It].Value = FVector::ZeroVector;
+					continue;
 				}
 
-				if (S.CurrentFatigue > 0.80f)
-				{
-					S.CurrentBehaviorState = EBoidState::Sleeping;
-				}
-				else if (S.CurrentHunger / Evo::MaxHunger(G) < 0.40f)
-				{
-					S.CurrentBehaviorState = EBoidState::Foraging;
-				}
-				else if (S.CurrentBehaviorState == EBoidState::Foraging && S.CurrentHunger / Evo::MaxHunger(G) > 0.85f)
-				{
-					S.CurrentBehaviorState = EBoidState::Wandering;
-				}
-				else if (S.CurrentBehaviorState == EBoidState::Wandering && S.ReproCooldown <= 0.f && S.CurrentHunger / Evo::MaxHunger(G) > Evo::ReproHungerFraction)
-				{
-					S.CurrentBehaviorState = EBoidState::Mating;
-				}
-				else if (S.CurrentBehaviorState == EBoidState::Mating && (S.ReproCooldown > 0.f || S.CurrentHunger / Evo::MaxHunger(G) < Evo::ReproHungerFraction))
-				{
-					S.CurrentBehaviorState = EBoidState::Wandering;
-				}
-				else if (S.CurrentFatigue <= 0.0f && S.CurrentBehaviorState == EBoidState::Sleeping)
-				{
-					S.CurrentBehaviorState = EBoidState::Wandering;
-				}
-			}
-			
-			// --- MODIFICATION : RESTRUCTURATION DE LA LOGIQUE DE CALCUL PAR ÉTAT ACCUMULÉ ---
-			// Au lieu de mélanger toutes les forces de manière linéaire, on initialise la séparation 
-			// et on distribue proprement les comportements dans des embranchements "else if" distincts.
-			FVector Steer = Separation * Evo::SeparationWeight;
-			
-			// Calcul de la poussée d'errance par défaut (Smooth Wander)
-			S.WanderAngle += Rng.FRandRange(-1.f, 1.f) * WanderDrift;
-			const FVector WanderSteer = FVector(FMath::Cos(S.WanderAngle), FMath::Sin(S.WanderAngle), 0.f) * (Evo::WanderAccel / Evo::MaxSteerAccel);
-			
-			if (S.CurrentBehaviorState == EBoidState::Fleeing)
-			{
-				// La force de séparation est accrue en fuite pour éviter les embouteillages fatals devant les prédateurs.
-				//Steer = Separation * (Evo::SeparationWeight * 1.5f);
-				//Steer = Separation * (Evo::SeparationWeight * 1.0f);
-				Steer += FleeSum * Evo::FleeWeight;
-				
-				// FALLBACK : Si le boid est en fuite mais qu'il n'a plus de direction de fuite claire
-				if (Steer.IsNearlyZero())
-				{
-					Steer += WanderSteer;
-				}
-			}
-			else if (S.CurrentBehaviorState == EBoidState::Foraging)
-			{
-				bool bHasAnyTarget = false;
-				
-				// Alignement et cohésion réduits en recherche de nourriture pour favoriser l'autonomie individuelle.
+				FVector Steer = Separation * Evo::SeparationWeight;
+
 				if (FlockWeight > KINDA_SMALL_NUMBER)
 				{
 					const FVector AvgVel = AlignSum / FlockWeight;
 					const FVector AvgPos = CohesionSum / FlockWeight;
-					Steer += (AvgVel - MyVel).GetSafeNormal() * (Evo::AlignmentWeight * 0.9f);
-					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration) * 0.9f);
+					Steer += (AvgVel - MyVel).GetSafeNormal() * Evo::AlignmentWeight;
+					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration));
 				}
+
+				Steer += FleeSum * Evo::FleeWeight;
 
 				if (Evo::CanEatPlants(G) && Need > 0.f)
 				{
@@ -227,7 +224,6 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					if (Grid->FindNearestFood(Pos, Radius, EFoodType::Plant, Food))
 					{
 						Steer += (Food.Position - Pos).GetSafeNormal() * (Evo::SeekFoodWeight * Need * Evo::PlantDigestion(G));
-						bHasAnyTarget = true;
 					}
 				}
 
@@ -237,7 +233,6 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 					if (Grid->FindNearestFood(Pos, Radius, EFoodType::Carcass, Carcass))
 					{
 						Steer += (Carcass.Position - Pos).GetSafeNormal() * (Evo::SeekFoodWeight * Need * Evo::MeatDigestion(G));
-						bHasAnyTarget = true;
 					}
 				}
 
@@ -245,136 +240,64 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 				{
 					Steer += (NearestPrey - Pos).GetSafeNormal()
 						* (Evo::ChaseWeightScale * G.Get(EBoidStat::Aggressiveness) * (0.5f + Need) * Evo::MeatDigestion(G));
+				}
 
-					// --- AJOUT : On mémorise le résultat pour le processeur de débug ---
-					S.bDebugHasPrey = bHasPrey;
-					S.LastTargetPreyPos = NearestPrey;
-					bHasAnyTarget = true;
+				// Courtship: close the distance to the chosen partner so the reproduction
+				// processor (which needs them within MatingRadius) has someone to pair with.
+				if (S.CurrentBehaviorState == EBoidState::Mating)
+				{
+					Steer += (MatePos - Pos).GetSafeNormal() * Evo::SeekPartnerWeight;
+				}
+
+				// Smooth meandering wander: a heading that drifts slowly instead of per-frame jitter.
+				S.WanderAngle += Rng.FRandRange(-1.f, 1.f) * WanderDrift;
+				Steer += FVector(FMath::Cos(S.WanderAngle), FMath::Sin(S.WanderAngle), 0.f) * (Evo::WanderAccel / Evo::MaxSteerAccel);
+
+				// Water is swimmable, not a wall — but also not a place to live (no food there).
+				if (Evo::TerrainHeight(Pos.X, Pos.Y) < Evo::SeaLevel + Evo::WaterEdgeMargin)
+				{
+					// Already in water: ALWAYS head firmly to the nearest dry land, so nobody gets
+					// trapped and starves in open water. A strong food/prey pull can still carry a good
+					// swimmer across, but with no goal they make for shore.
+					const FVector ToLand = Evo::ToHigherGround(Pos.X, Pos.Y, Evo::WaterEscapeProbe);
+					if (!ToLand.IsNearlyZero())
+					{
+						Steer += ToLand * (Evo::WaterEscapeAccel / Evo::MaxSteerAccel);
+					}
 				}
 				else
 				{
-					// Indispensable pour couper le dessin dès que la proie s'échappe ou meurt
-					S.bDebugHasPrey = false; 
-				}
-				
-				// FALLBACK : Si le boid cherche à manger mais ne voit absolument AUCUNE nourriture/proie autour
-				// Il continue d'avancer et de patrouiller au lieu de s'arrêter net sur place !
-				if (!bHasAnyTarget)
-				{
-					Steer += WanderSteer;
-				}
-			}
-			// =========================================================================
-			// --- AJOUT : BLOC COMPORTEMENTAL MATING (ACCOUPLEMENT) ---
-			// =========================================================================
-			else if (S.CurrentBehaviorState == EBoidState::Mating)
-			{
-				bool bHasPartnerTarget = false;
-				
-				// Alignement et cohésion modérés pour ne pas perturber l'approche directe du couple
-				if (FlockWeight > KINDA_SMALL_NUMBER)
-				{
-					const FVector AvgVel = AlignSum / FlockWeight;
-					const FVector AvgPos = CohesionSum / FlockWeight;
-					Steer += (AvgVel - MyVel).GetSafeNormal() * (Evo::AlignmentWeight * 0.95f);
-					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration) * 0.95f);
-				}
-
-				// Si le partenaire mémorisé est structurellement et globalement en vie dans le monde
-				if (S.TargetPartner.IsValid() && EntityManager.IsEntityValid(S.TargetPartner))
-				{
-					const FTransformFragment* PartnerXf = EntityManager.GetFragmentDataPtr<FTransformFragment>(S.TargetPartner);
-					if (PartnerXf)
+					// On land heading toward water: reluctance to enter scales with adaptation, so a
+					// strong swimmer wades in to forage/chase while a poor swimmer keeps to dry ground.
+					const FVector Ahead = Pos + (bMoving ? Forward : FVector(1.f, 0.f, 0.f)) * Evo::WaterLookAhead;
+					if (Evo::TerrainHeight(Ahead.X, Ahead.Y) < Evo::SeaLevel + Evo::WaterEdgeMargin)
 					{
-						const FVector PartnerPos = PartnerXf->GetTransform().GetLocation();
-						Steer += (PartnerPos - Pos).GetSafeNormal() * Evo::SeekPartnerWeight;
-						bHasPartnerTarget = true;
-					}
-				}
-				
-				// FALLBACK : Si le partenaire est perdu ou invalide
-				if (!bHasPartnerTarget)
-				{
-					Steer += WanderSteer;
-				}
-			}
-			// =========================================================================
-			else // Wandering (Déplacement aléatoire standard par défaut)
-			{
-				if (FlockWeight > KINDA_SMALL_NUMBER)
-				{
-					const FVector AvgVel = AlignSum / FlockWeight;
-					const FVector AvgPos = CohesionSum / FlockWeight;
-					Steer += (AvgVel - MyVel).GetSafeNormal() * Evo::AlignmentWeight;
-					Steer += (AvgPos - Pos).GetSafeNormal() * (Evo::CohesionWeightScale * G.Get(EBoidStat::Integration));
-				}
-
-				// Smooth meandering wander
-				S.WanderAngle += Rng.FRandRange(-1.f, 1.f) * WanderDrift;
-				Steer += FVector(FMath::Cos(S.WanderAngle), FMath::Sin(S.WanderAngle), 0.f) * (Evo::WanderAccel / Evo::MaxSteerAccel);
-			}
-			
-			// Water is swimmable, not a wall — but also not a place to live (no food there).
-			if (Evo::TerrainHeight(Pos.X, Pos.Y) < Evo::SeaLevel + Evo::WaterEdgeMargin)
-			{
-				// Already in water: ALWAYS head firmly to the nearest dry land, so nobody gets
-				// trapped and starves in open water. A strong food/prey pull can still carry a good
-				// swimmer across, but with no goal they make for shore.
-				const FVector ToLand = Evo::ToHigherGround(Pos.X, Pos.Y, Evo::WaterEscapeProbe);
-				if (!ToLand.IsNearlyZero())
-				{
-					Steer += ToLand * (Evo::WaterEscapeAccel / Evo::MaxSteerAccel);
-				}
-			}
-			else
-			{
-				// On land heading toward water: reluctance to enter scales with adaptation, so a
-				// strong swimmer wades in to forage/chase while a poor swimmer keeps to dry ground.
-				const FVector Ahead = Pos + (bMoving ? Forward : FVector(1.f, 0.f, 0.f)) * Evo::WaterLookAhead;
-				if (Evo::TerrainHeight(Ahead.X, Ahead.Y) < Evo::SeaLevel + Evo::WaterEdgeMargin)
-				{
-					const float Reluctance = 1.f - Evo::AquaticAdaptation(G);
-					if (Reluctance > 0.02f)
-					{
-						const FVector ToLand = Evo::ToHigherGround(Pos.X, Pos.Y, Evo::WaterLookAhead);
-						if (!ToLand.IsNearlyZero())
+						const float Reluctance = 1.f - Evo::AquaticAdaptation(G);
+						if (Reluctance > 0.02f)
 						{
-							Steer += ToLand * (Reluctance * Evo::WaterAvoidAccel / Evo::MaxSteerAccel);
+							const FVector ToLand = Evo::ToHigherGround(Pos.X, Pos.Y, Evo::WaterLookAhead);
+							if (!ToLand.IsNearlyZero())
+							{
+								Steer += ToLand * (Reluctance * Evo::WaterAvoidAccel / Evo::MaxSteerAccel);
+							}
 						}
 					}
 				}
-			}
 
-			// Turn back near the arena edge.
-			const float EdgeX = Evo::ArenaHalfExtent - FMath::Abs(Pos.X);
-			const float EdgeY = Evo::ArenaHalfExtent - FMath::Abs(Pos.Y);
-			if (EdgeX < Evo::BoundsMargin)
-			{
-				Steer.X += -FMath::Sign(Pos.X) * (Evo::BoundsTurnAccel / Evo::MaxSteerAccel) * (1.f - EdgeX / Evo::BoundsMargin);
-			}
-			if (EdgeY < Evo::BoundsMargin)
-			{
-				Steer.Y += -FMath::Sign(Pos.Y) * (Evo::BoundsTurnAccel / Evo::MaxSteerAccel) * (1.f - EdgeY / Evo::BoundsMargin);
-			}
-
-			// --- NETTOYAGE ET REMISSION DE LA FORCE DE SECOURS ---
-			Steer.Z = 0.f;
-
-			// N'appliquer la force de relance QUE si le boid ne dort pas ET que sa vitesse est critique
-			if (S.CurrentBehaviorState != EBoidState::Sleeping)
-			{
-				// Si l'agent avance à moins de ~10 unités/s (Vitesse Squared < 100)
-				if (MyVel.SizeSquared() < 100.f) 
+				// Turn back near the arena edge.
+				const float EdgeX = Evo::ArenaHalfExtent - FMath::Abs(Pos.X);
+				const float EdgeY = Evo::ArenaHalfExtent - FMath::Abs(Pos.Y);
+				if (EdgeX < Evo::BoundsMargin)
 				{
-					// On lui donne une petite impulsion vers l'avant s'il bougeait, 
-					// ou selon son angle de calcul pour le débloquer
-					FVector EscapeDir = bMoving ? Forward : FVector(FMath::Cos(S.WanderAngle), FMath::Sin(S.WanderAngle), 0.f);
-					Steer += EscapeDir * 0.4f; 
+					Steer.X += -FMath::Sign(Pos.X) * (Evo::BoundsTurnAccel / Evo::MaxSteerAccel) * (1.f - EdgeX / Evo::BoundsMargin);
 				}
-			}
+				if (EdgeY < Evo::BoundsMargin)
+				{
+					Steer.Y += -FMath::Sign(Pos.Y) * (Evo::BoundsTurnAccel / Evo::MaxSteerAccel) * (1.f - EdgeY / Evo::BoundsMargin);
+				}
 
-			// Force finale propre : le steering reprend le contrôle total dès que le boid bouge !
-			Force[It].Value = Steer.GetClampedToMaxSize(1.f) * Evo::MaxSteerAccel;
-		}
-	});
+				Steer.Z = 0.f;
+				Force[It].Value = Steer.GetClampedToMaxSize(1.f) * Evo::MaxSteerAccel;
+			}
+		});
 }

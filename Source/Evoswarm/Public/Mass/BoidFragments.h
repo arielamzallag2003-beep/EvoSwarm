@@ -9,21 +9,9 @@
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
 #include "BoidStats.h"
-#include "MassEntityHandle.h"
 #include "BoidFragments.generated.h"
 
 class USpeciesConfig;
-
-/** Les différents états comportementaux de notre FSM hybride. */
-UENUM(BlueprintType)
-enum class EBoidState : uint8
-{
-	Wandering,  // Errance douce par défaut (Flocking actif)
-	Foraging,   // Recherche active de nourriture
-	Mating,     // Recherche d'un partenaire de reproduction
-	Sleeping,   // Sommeil (Vitesse nulle, métabolisme lent, perception réduite)
-	Fleeing     // Fuite active face à un prédateur (Sprint forcé)
-};
 
 /** The inheritable genome carried by every boid. */
 USTRUCT()
@@ -32,6 +20,22 @@ struct EVOSWARM_API FBoidGenomeFragment : public FMassFragment
 	GENERATED_BODY()
 
 	FBoidGenome Genome;
+};
+
+/**
+ * Coarse behaviour state. Decided once per frame by the steering processor and read by
+ * everything downstream (movement, feeding, metabolism, debug draw). Priority order is
+ * danger > exhaustion > breeding > feeding, so only one state can be active at a time.
+ */
+UENUM()
+enum class EBoidState : uint8
+{
+	Wandering,   // default: meandering and flocking, no pressing need
+	Foraging,    // hungry, steering toward food
+	Hunting,     // hungry carnivore closing on live prey
+	Fleeing,     // a higher-tier predator is in range, or recently took a hit
+	Mating,      // ready to breed and steering toward a chosen partner
+	Sleeping     // resting: does not move or feed, burns little, heals fast
 };
 
 /** Per-frame mutable life state. */
@@ -66,25 +70,12 @@ struct EVOSWARM_API FBoidStateFragment : public FMassFragment
 
 	/** Generations from the founding population (0 = initial spawn). Offspring = parent + 1. */
 	int32 Generation = 0;
-	
+
 	// Nombre de fois ou l'individu s'est reproduit
 	int32 ReproductionCount = 0;
-	
-	/** État comportemental actuel de la FSM (par défaut Wandering). */
-	EBoidState CurrentBehaviorState = EBoidState::Wandering;
 
-	/** Niveau de fatigue accumulé, allant de 0.0f (frais) à 1.0f (épuisé). */
-	float CurrentFatigue = 0.f;
-	
-	/** Le partenaire actuellement ciblé pour la reproduction. FMassEntityHandle::IsValid() sera faux si aucun. */
-	FMassEntityHandle TargetPartner;
-	
-	/** Cache du score d'attractivité du partenaire ciblé */
-	float TargetPartnerAttractiveness = 0.f;
-	
-	// --- AJOUT POUR LE DEBUG PERFORMANCE ---
-	FVector LastTargetPreyPos = FVector::ZeroVector;
-	bool bDebugHasPrey = false;
+	/** Current behaviour. Written by the steering processor, read by everyone else. */
+	EBoidState CurrentBehaviorState = EBoidState::Wandering;
 };
 
 /** What kind of food an entity is. */

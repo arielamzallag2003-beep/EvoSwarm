@@ -1,11 +1,12 @@
 // Copyright Evoswarm.
 //
 // A free-flying spectator pawn (ZQSD via input config) with:
-// - B key: toggle debug visualisation
-// - F key: lock/unlock crosshair inspect
-// - Tick:  center-screen ray -> terrain hit -> grid query -> find the nearest boid,
-//        read its live fragments into the sim subsystem's inspect state, and
-//        draw a selection ring around it.
+// - B key:       toggle debug visualisation
+// - Numpad 0-4:  select the debug overlay mode
+// - F key:       lock/unlock crosshair inspect
+// - Tick:        center-screen ray -> terrain hit -> grid query -> find the nearest boid,
+//                read its live fragments into the sim subsystem's inspect state, and
+//                draw a selection ring around it.
 
 #pragma once
 
@@ -26,16 +27,15 @@ public:
 
 private:
 	void ToggleDebug();
-	
-	// Handlers pour changer le mode de débug
+	void ToggleSelect();
+
+	// Handlers pour changer le mode de debug (numpad 0-4).
 	void SetDebugMode0();
 	void SetDebugMode1();
 	void SetDebugMode2();
 	void SetDebugMode3();
 	void SetDebugMode4();
 
-	// Helper pour envoyer le mode au subsystem
+	// Helper pour envoyer le mode au subsystem.
 	void ApplyDebugMode(int32 Mode);
-};
-	void ToggleSelect();
 };
