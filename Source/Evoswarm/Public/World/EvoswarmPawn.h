@@ -26,5 +26,16 @@ public:
 
 private:
 	void ToggleDebug();
+	
+	// Handlers pour changer le mode de débug
+	void SetDebugMode0();
+	void SetDebugMode1();
+	void SetDebugMode2();
+	void SetDebugMode3();
+	void SetDebugMode4();
+
+	// Helper pour envoyer le mode au subsystem
+	void ApplyDebugMode(int32 Mode);
+};
 	void ToggleSelect();
 };

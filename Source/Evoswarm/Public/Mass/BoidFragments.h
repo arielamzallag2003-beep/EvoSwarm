@@ -9,9 +9,21 @@
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
 #include "BoidStats.h"
+#include "MassEntityHandle.h"
 #include "BoidFragments.generated.h"
 
 class USpeciesConfig;
+
+/** Les différents états comportementaux de notre FSM hybride. */
+UENUM(BlueprintType)
+enum class EBoidState : uint8
+{
+	Wandering,  // Errance douce par défaut (Flocking actif)
+	Foraging,   // Recherche active de nourriture
+	Mating,     // Recherche d'un partenaire de reproduction
+	Sleeping,   // Sommeil (Vitesse nulle, métabolisme lent, perception réduite)
+	Fleeing     // Fuite active face à un prédateur (Sprint forcé)
+};
 
 /** The inheritable genome carried by every boid. */
 USTRUCT()
@@ -57,6 +69,22 @@ struct EVOSWARM_API FBoidStateFragment : public FMassFragment
 	
 	// Nombre de fois ou l'individu s'est reproduit
 	int32 ReproductionCount = 0;
+	
+	/** État comportemental actuel de la FSM (par défaut Wandering). */
+	EBoidState CurrentBehaviorState = EBoidState::Wandering;
+
+	/** Niveau de fatigue accumulé, allant de 0.0f (frais) à 1.0f (épuisé). */
+	float CurrentFatigue = 0.f;
+	
+	/** Le partenaire actuellement ciblé pour la reproduction. FMassEntityHandle::IsValid() sera faux si aucun. */
+	FMassEntityHandle TargetPartner;
+	
+	/** Cache du score d'attractivité du partenaire ciblé */
+	float TargetPartnerAttractiveness = 0.f;
+	
+	// --- AJOUT POUR LE DEBUG PERFORMANCE ---
+	FVector LastTargetPreyPos = FVector::ZeroVector;
+	bool bDebugHasPrey = false;
 };
 
 /** What kind of food an entity is. */

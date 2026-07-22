@@ -461,3 +461,11 @@ void UEvoswarmSimSubsystem::PlayBirthBlip()
 
 	BirthSound->QueueAudio(reinterpret_cast<const uint8*>(Pcm.GetData()), Pcm.Num() * sizeof(int16));
 }
+
+void UEvoswarmSimSubsystem::SetDebugMode(int32 NewMode)
+{
+	// On s'assure que le mode reste bien compris entre 0 et 4
+	CurrentDebugMode = FMath::Clamp(NewMode, 0, 4);
+	
+	UE_LOG(LogTemp, Log, TEXT("Evoswarm Debug Mode changé pour : %d"), CurrentDebugMode);
+}

@@ -63,33 +63,37 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			const FBoidGenome& G = Gen[It].Genome;
 			const float MaxHunger = Evo::MaxHunger(G);
 
-			// Must be a mature, rested, well-fed individual to initiate breeding.
-			if (S.Age < Evo::MaturityAge || S.ReproCooldown > 0.f || S.CurrentHunger < Evo::ReproHungerFraction * MaxHunger)
+			// Doit être mature, reposé, nourri et disponible pour pouvoir se reproduire.
+			if (S.Age < Evo::MaturityAge || S.CurrentFatigue >= 0.8f || S.ReproCooldown > 0.f || S.CurrentHunger < Evo::ReproHungerFraction * MaxHunger)
 			{
+				S.TargetPartner.Reset();
 				continue;
 			}
 
 			const FMassEntityHandle Self = Context.GetEntity(It);
-			if (!Grid->TryClaim(Self)) // already paired by someone this frame
-			{
-				continue;
-			}
 			const FVector Pos = Xf[It].GetTransform().GetLocation();
 
 			// Sexual selection: among ready same-species partners in range, choose the one with
 			// the higher attractiveness (see ComputeAttractivenessScore), and lower genetic distance
-			FMassEntityHandle Mate;
-			FVector MatePos = FVector::ZeroVector;
+			FMassEntityHandle BestMate;
 			float BestScore = -1.f;
 			bool bFoundMate = false;
+			
+			if (S.TargetPartner.IsValid() && EntityManager.IsEntityValid(S.TargetPartner))
+			{
+				BestMate = S.TargetPartner;
+				BestScore = S.TargetPartnerAttractiveness;
+				bFoundMate = true;
+			}
+			
 			Grid->QueryAgents(Pos, Evo::MatingRadius, [&](const FGridAgent& Other)
 			{
-				if (Other.SpeciesIndex != Species.SpeciesIndex || !Other.bCanMate || Other.Entity == Self)
+				// On ignore soi-même, le partenaire actuel s'il existe, les membres d'une autre espèces et les individus qui ne peuvent pas se reproduire
+				if (Other.SpeciesIndex != Species.SpeciesIndex || !Other.bCanMate || Other.Entity == Self || Other.Entity == BestMate)
 				{
 					return;
 				}
 
-				// 1. On va chercher TRÈS rapidement le génome de l'autre Boid dans Mass via son EntityHandle
 				const FBoidGenomeFragment* OtherGenFragment = EntityManager.GetFragmentDataPtr<FBoidGenomeFragment>(Other.Entity);
 				if (!OtherGenFragment)
 				{
@@ -98,11 +102,11 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
     
 				const FBoidGenome& OtherGenome = OtherGenFragment->Genome;
 
-				// 2. On récupère l'attractivité brute calculée
+				// Score d'attractivité
 				float AttractionScore = Other.Attractiveness;
 				float TotalNormalizedDiff = 0.f;
 
-				// 3. Différence génétique normalisée par statistique
+				// Différence génétique normalisée par statistique
 				for (int32 Index = 0; Index < NumBoidStats; ++Index)
 				{
 					const FBoidStatDef Def = Config->GetStatDef(static_cast<EBoidStat>(Index));
@@ -110,39 +114,79 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
 
 					if (Range > KINDA_SMALL_NUMBER)
 					{
-						// Correction ici : on compare G (le boid actuel) et OtherGenome (le partenaire trouvé via Mass)
 						const float RawDiff = FMath::Abs(G.Stats[Index] - OtherGenome.Stats[Index]);
 						TotalNormalizedDiff += (RawDiff / Range);
 					}
 				}
 
 				float GenomeDifferenceFraction = TotalNormalizedDiff / static_cast<float>(NumBoidStats);
-    
-				// On applique le malus de différence génétique
 				AttractionScore -= (GenomeDifferenceFraction * 0.5f);
 
 				if (AttractionScore > BestScore)
 				{
 					BestScore = AttractionScore;
-					Mate = Other.Entity;
-					MatePos = Other.Position;
+					BestMate = Other.Entity;
 					bFoundMate = true;
 				}
 			});
 
-			if (!bFoundMate || !Grid->TryClaim(Mate))
+			if (bFoundMate)
 			{
+				S.TargetPartner = BestMate;
+				S.TargetPartnerAttractiveness = BestScore;
+			}
+			else
+			{
+				S.TargetPartner.Reset();
+				S.TargetPartnerAttractiveness = 0.f;
 				continue; // no available partner this frame
 			}
+			
+			// --- TENTATIVE D'ACCOUPLEMENT PHYSIQUE ---
 
-			FBoidGenomeFragment* MateGen = EntityManager.GetFragmentDataPtr<FBoidGenomeFragment>(Mate);
-			FBoidStateFragment* MateState = EntityManager.GetFragmentDataPtr<FBoidStateFragment>(Mate);
-			if (!MateGen || !MateState)
+			if (!EntityManager.IsEntityValid(BestMate))
 			{
+				S.TargetPartner.Reset();
+				S.TargetPartnerAttractiveness = 0.f;
 				continue;
 			}
 
-			// === CHAÎNAGE CROSSOVER + MUTATION ===
+			const FTransformFragment* MateXf = EntityManager.GetFragmentDataPtr<FTransformFragment>(BestMate);
+			FBoidGenomeFragment* MateGen = EntityManager.GetFragmentDataPtr<FBoidGenomeFragment>(BestMate);
+			FBoidStateFragment* MateState = EntityManager.GetFragmentDataPtr<FBoidStateFragment>(BestMate);
+			
+			if (!MateXf || !MateState || !MateGen)
+			{
+				S.TargetPartner.Reset();
+				S.TargetPartnerAttractiveness = 0.f;
+				continue;
+			}
+
+			// Calcul de la distance d'accouplement dynamique (fraction de la perception minimale entre les deux)
+			const float MyRadius = Evo::PerceptionRadius(G);
+			const float MateRadius = Evo::PerceptionRadius(MateGen->Genome);
+			const float MinPerceptionRadius = FMath::Min(MyRadius, MateRadius);
+			
+			// Seuil d'accouplement : 15% du rayon de perception minimal commun
+			const float MatingFraction = 0.15f; 
+			const float SafeMatingDistanceSq = FMath::Square(MinPerceptionRadius * MatingFraction);
+
+			const FVector MatePos = MateXf->GetTransform().GetLocation();
+			const float DistanceSq = FVector::DistSquared(Pos, MatePos);
+
+			if (DistanceSq > SafeMatingDistanceSq)
+			{
+				// Trop loin : On laisse le Steering rapprocher les boids.
+				continue; 
+			}
+			
+			// Les deux boids doivent être disponibles pour s'unir à cet instant t
+			if (!Grid->TryClaim(Self) || !Grid->TryClaim(BestMate))
+			{
+				continue; // L'un d'eux est déjà occupé par un accouplement validé cette frame
+			}
+			
+			// === CONCEPTION --> CROSSOVER + MUTATION ===
 			// 1. Le mélange (40/40/19/1)
 			FBoidGenome Child = FBoidGenomeLibrary::Crossover(G, MateGen->Genome, *Config, Rng);
 			// 2. La micro-mutation sur l'enfant
@@ -152,16 +196,21 @@ void UBoidReproductionProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			const int32 ChildGeneration = FMath::Max(S.Generation, MateState->Generation) + 1;
 			Sim->RequestBirth(Species, Child, BirthPos, ChildGeneration);
 
-			// === HISTORIQUE DES REPRODUCTIONS ===
-			// On augmente le compteur des deux parents puisque la naissance est validée !
+			// Consommation et historique
 			S.ReproductionCount++;
 			MateState->ReproductionCount++;
-
+			
 			// Both parents pay the cost and go on cooldown.
 			S.CurrentHunger -= Evo::ReproHungerCost * MaxHunger;
 			S.ReproCooldown = Evo::ReproCooldown(G);
 			MateState->CurrentHunger -= Evo::ReproHungerCost * Evo::MaxHunger(MateGen->Genome);
 			MateState->ReproCooldown = Evo::ReproCooldown(MateGen->Genome);
+
+			// Réinitialisation après succès
+			S.TargetPartner.Reset();
+			S.TargetPartnerAttractiveness = 0.f;
+			MateState->TargetPartner.Reset();
+			MateState->TargetPartnerAttractiveness = 0.f;
 		}
 	});
 }

@@ -59,15 +59,16 @@ namespace Evo
 	inline constexpr float DietEfficiencyFloor = 0.1f;
 
 	// --- Flocking weights ---
-	inline constexpr float SeparationRadius = 350.f;
-	inline constexpr float SeparationWeight = 1.6f;
-	inline constexpr float AlignmentWeight = 1.0f;
-	inline constexpr float CohesionWeightScale = 0.06f; // multiplied by the Integration stat (lower = less clumping)
-	inline constexpr float FleeWeight = 4.5f;
-	inline constexpr float ChaseWeightScale = 0.5f;  // multiplied by the Aggressiveness stat
-	inline constexpr float SeekFoodWeight = 2.5f;  // herbivore pull toward food, scaled by hunger
-	inline constexpr float MaxSteerAccel = 3000.f;
-	inline constexpr float WanderAccel = 600.f;
+	inline constexpr float SeparationRadius     = 350.f;
+	inline constexpr float SeparationWeight     = 1.6f;
+	inline constexpr float AlignmentWeight      = 1.0f;
+	inline constexpr float CohesionWeightScale  = 0.06f; // multiplied by the Integration stat (lower = less clumping)
+	inline constexpr float FleeWeight           = 4.5f;
+	inline constexpr float ChaseWeightScale     = 0.5f;  // multiplied by the Aggressiveness stat
+	inline constexpr float SeekFoodWeight       = 2.5f;  // herbivore pull toward food, scaled by hunger
+	inline constexpr float SeekPartnerWeight	= 2.5f;
+	inline constexpr float MaxSteerAccel        = 3000.f;
+	inline constexpr float WanderAccel          = 600.f;
 
 	// --- Water (land boids avoid it, and wade slowly if they enter) ---
 	inline constexpr float WaterLookAhead = 450.f;  // how far ahead a boid checks for water

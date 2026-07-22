@@ -190,6 +190,13 @@ public:
 	// --- Debug visualisation (toggled by a key) ---
 	void ToggleDebugDraw() { bDebugDraw = !bDebugDraw; }
 	bool IsDebugDraw() const { return bDebugDraw; }
+	/** Définit directement le mode de debug (0 à 4) */
+	UFUNCTION(BlueprintCallable, Category = "Evoswarm|Debug")
+	void SetDebugMode(int32 NewMode);
+
+	/** Récupère le mode de debug actuel */
+	UFUNCTION(BlueprintPure, Category = "Evoswarm|Debug")
+	int32 GetDebugMode() const { return CurrentDebugMode; }
 
 	// --- Spawning (safe: invoked outside Mass processing) ---
 	FMassEntityHandle SpawnBoid(const FBoidSpeciesSharedFragment& Shared, const FBoidGenome& Genome, const FVector& Position, int32 Generation = 0);
@@ -265,6 +272,10 @@ private:
 
 	float ElapsedTime = 0.f;       // seconds since the sim started
 	float HistoryTimer = 0.f;      // accumulator for population sampling
+	
+	/** Mode de debug actif (0: Off, 1: Comportements/FSM, 2: Espèces/Perceptions, 3: ..., 4: ...) */
+	int32 CurrentDebugMode = 0;
+};
 
 	FBoidInspectState Inspect;
 };
