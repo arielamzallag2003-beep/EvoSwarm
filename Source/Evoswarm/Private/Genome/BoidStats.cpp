@@ -1,6 +1,8 @@
 // Copyright Evoswarm.
 
 #include "BoidStats.h"
+
+#include "BoidFragments.h"
 #include "SpeciesConfig.h"
 #include "EvoswarmTuning.h"
 
@@ -138,17 +140,43 @@ FBoidGenome FBoidGenomeLibrary::Mutate(const FBoidGenome& Parent, const USpecies
 
 FBoidGenome FBoidGenomeLibrary::Crossover(const FBoidGenome& ParentA, const FBoidGenome& ParentB, const USpeciesConfig& Species, FRandomStream& Rng)
 {
-	// Uniform crossover: each stat is inherited from one parent or the other.
 	FBoidGenome Child;
+
 	for (int32 Index = 0; Index < NumBoidStats; ++Index)
 	{
-		Child.Stats[Index] = (Rng.FRand() < 0.5f) ? ParentA.Stats[Index] : ParentB.Stats[Index];
+		const float RandomRoll = Rng.FRand(); // Génère un float entre 0.f et 1.f
+
+		if (RandomRoll < 0.40f)
+		{
+			// [0% à 40%] : Héritage direct du Parent A
+			Child.Stats[Index] = ParentA.Stats[Index];
+		}
+		else if (RandomRoll < 0.80f)
+		{
+			// [40% à 80%] : Héritage direct du Parent B
+			Child.Stats[Index] = ParentB.Stats[Index];
+		}
+		else if (RandomRoll < 0.99f)
+		{
+			// [80% à 99%] : 19% de chance d'obtenir la moyenne des deux parents (Lissage)
+			Child.Stats[Index] = (ParentA.Stats[Index] + ParentB.Stats[Index]) * 0.5f;
+		}
+		else
+		{
+			// [99% à 100%] : 1% de chance d'anomalie génétique (Saut aléatoire complet)
+			const FBoidStatDef Def = Species.GetStatDef(static_cast<EBoidStat>(Index));
+			const float MaxV = FMath::Max(Def.Min, Def.Max);
+          
+			Child.Stats[Index] = Rng.FRandRange(Def.Min, MaxV);
+		}
 	}
 
-	// Recombination can land above the budget frontier (high stats from both parents); pull
-	// it back onto the budget, then mutate by reallocating points within that budget.
+	// Sécurité budgétaire : On redresse les excès si les 1% ou les moyennes ont dépassé la limite.
 	ClampToBudget(Child, Species);
+    
+	// Optimisation : On effectue le troc de gènes à budget constant selon le MutationRate de l'enfant.
 	Reallocate(Child, Species, Rng, FMath::Clamp(Child.Get(EBoidStat::MutationRate), 0.f, 1.f));
+    
 	return Child;
 }
 
@@ -202,4 +230,28 @@ void FBoidGenomeLibrary::Reallocate(FBoidGenome& Genome, const USpeciesConfig& S
 	}
 
 	ClampToBudget(Genome, Species);
+}
+
+float FBoidGenomeLibrary::ComputeAttractivenessScore(const FBoidGenome& Genome, const FBoidStateFragment& State)
+{
+	// 1. SANTÉ (60% du score)
+	const float MaxHP = Evo::MaxHP(Genome);
+	const float HealthFraction = (MaxHP > 0.f) ? FMath::Clamp(State.CurrentHP / MaxHP, 0.f, 1.f) : 0.f;
+
+	// 2. ÂGE NORMALISÉ VIA LIFETIME (20% du score)
+	const float MaxLife = Genome.Stats[StatIndex(EBoidStat::Lifespan)];
+	const float LifespanWindow = MaxLife - Evo::MaturityAge;
+	float AgeFraction = 0.f;
+	if (LifespanWindow > 0.f)
+	{
+		const float AgeSinceMaturity = FMath::Max(0.f, State.Age - Evo::MaturityAge);
+		AgeFraction = FMath::Clamp(AgeSinceMaturity / LifespanWindow, 0.f, 1.f);
+	}
+
+	// 3. REPRODUCTION (20% du score)
+	const float MaxExpectedRepro = 5.f;
+	const float ReproFraction = FMath::Clamp(static_cast<float>(State.ReproductionCount) / MaxExpectedRepro, 0.f, 1.f);
+
+	// Score final STRICTEMENT entre 0.0 et 1.0
+	return (HealthFraction * 0.6f) + (AgeFraction * 0.20f) + (ReproFraction * 0.20f);
 }

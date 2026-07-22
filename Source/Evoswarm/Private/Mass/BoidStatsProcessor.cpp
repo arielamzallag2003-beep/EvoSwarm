@@ -4,6 +4,7 @@
 #include "MassExecutionContext.h"
 #include "BoidFragments.h"
 #include "BoidStats.h"
+#include "EvoswarmTuning.h"
 #include "EvoswarmSimSubsystem.h"
 
 UBoidStatsProcessor::UBoidStatsProcessor()
@@ -35,7 +36,8 @@ void UBoidStatsProcessor::Execute(FMassEntityManager& EntityManager, FMassExecut
 	TArray<FSpeciesLiveStats>& Stats = Sim->GetSpeciesStatsMutable();
 	const int32 N = Stats.Num();
 
-	// Reset accumulators (preserve Name/Color which the game mode set).
+	// Reset accumulators (preserve Name/Color which the game mode set, and the lifetime
+	// counters / histories which the subsystem owns).
 	for (FSpeciesLiveStats& S : Stats)
 	{
 		S.Count = 0;
@@ -43,35 +45,43 @@ void UBoidStatsProcessor::Execute(FMassEntityManager& EntityManager, FMassExecut
 		S.AvgLifespan = S.AvgDamage = S.AvgArmor = S.AvgMutationRate = 0.f;
 		S.AvgGeneration = 0.f;
 		S.MaxGeneration = 0;
+		// One bin per render diet hue, so the HUD histogram and creature colours line up.
+		// (SetNumZeroed only zeroes NEW elements, so clear explicitly every frame.)
+		S.DietHistogram.SetNumZeroed(Evo::NumDietHues);
+		for (int32& Bin : S.DietHistogram)
+		{
+			Bin = 0;
+		}
 	}
 
 	EntityQuery.ForEachEntityChunk(Context, [&Stats, N](FMassExecutionContext& Context)
-	{
-		const FBoidSpeciesSharedFragment& Species = Context.GetSharedFragment<FBoidSpeciesSharedFragment>();
-		if (Species.SpeciesIndex < 0 || Species.SpeciesIndex >= N)
 		{
-			return;
-		}
-		FSpeciesLiveStats& S = Stats[Species.SpeciesIndex];
-		const TConstArrayView<FBoidGenomeFragment> Gen = Context.GetFragmentView<FBoidGenomeFragment>();
-		const TConstArrayView<FBoidStateFragment> StateView = Context.GetFragmentView<FBoidStateFragment>();
-		for (FMassExecutionContext::FEntityIterator It = Context.CreateEntityIterator(); It; ++It)
-		{
-			const FBoidGenome& G = Gen[It].Genome;
-			++S.Count;
-			S.AvgHP            += G.Get(EBoidStat::HP);
-			S.AvgWalkSpeed     += G.Get(EBoidStat::WalkSpeed);
-			S.AvgPerception    += G.Get(EBoidStat::Perception);
-			S.AvgDiet          += G.Get(EBoidStat::Diet);
-			S.AvgLifespan      += G.Get(EBoidStat::Lifespan);
-			S.AvgDamage        += G.Get(EBoidStat::Damage);
-			S.AvgArmor         += G.Get(EBoidStat::Armor);
-			S.AvgMutationRate  += G.Get(EBoidStat::MutationRate);
-			const int32 Gens = StateView[It].Generation;
-			S.AvgGeneration    += static_cast<float>(Gens);
-			S.MaxGeneration = FMath::Max(S.MaxGeneration, Gens);
-		}
-	});
+			const FBoidSpeciesSharedFragment& Species = Context.GetSharedFragment<FBoidSpeciesSharedFragment>();
+			if (Species.SpeciesIndex < 0 || Species.SpeciesIndex >= N)
+			{
+				return;
+			}
+			FSpeciesLiveStats& S = Stats[Species.SpeciesIndex];
+			const TConstArrayView<FBoidGenomeFragment> Gen = Context.GetFragmentView<FBoidGenomeFragment>();
+			const TConstArrayView<FBoidStateFragment> StateView = Context.GetFragmentView<FBoidStateFragment>();
+			for (FMassExecutionContext::FEntityIterator It = Context.CreateEntityIterator(); It; ++It)
+			{
+				const FBoidGenome& G = Gen[It].Genome;
+				++S.Count;
+				++S.DietHistogram[Evo::HueBucket(G.Get(EBoidStat::Diet))]; // same binning as the render hues
+				S.AvgHP += G.Get(EBoidStat::HP);
+				S.AvgWalkSpeed += G.Get(EBoidStat::WalkSpeed);
+				S.AvgPerception += G.Get(EBoidStat::Perception);
+				S.AvgDiet += G.Get(EBoidStat::Diet);
+				S.AvgLifespan += G.Get(EBoidStat::Lifespan);
+				S.AvgDamage += G.Get(EBoidStat::Damage);
+				S.AvgArmor += G.Get(EBoidStat::Armor);
+				S.AvgMutationRate += G.Get(EBoidStat::MutationRate);
+				const int32 Gens = StateView[It].Generation;
+				S.AvgGeneration += static_cast<float>(Gens);
+				S.MaxGeneration = FMath::Max(S.MaxGeneration, Gens);
+			}
+		});
 
 	// Finalise: sums -> averages.
 	for (FSpeciesLiveStats& S : Stats)

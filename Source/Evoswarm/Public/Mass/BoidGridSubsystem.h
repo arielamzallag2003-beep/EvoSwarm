@@ -25,7 +25,7 @@ struct FGridAgent
 	float Diet = 0.f;
 	float Intimidation = 0.f;
 	bool bCanMate = false; // mature, fed, off cooldown -> available as a breeding partner
-	float Condition = 0.f; // body condition in [0,1] (health fraction) -> mate-choice fitness signal
+	float Attractiveness = 0.f; // Attractiveness in [0,1] (see ComputeAttractivenessScore) -> mate-choice fitness signal
 };
 
 /** A food node snapshot stored in the grid for this frame. */

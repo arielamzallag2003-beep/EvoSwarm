@@ -27,6 +27,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "HoudiniEngine",
+			"Enabled": false
+		},
+		{
 			"Name": "PythonScriptPlugin",
 			"Enabled": true,
 			"TargetAllowList": [

@@ -68,9 +68,9 @@ void UBoidGridUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassE
 			Agent.Intimidation = G.Get(EBoidStat::Intimidation);
 			Agent.bCanMate = (S.Age >= Evo::MaturityAge) && (S.ReproCooldown <= 0.f)
 				&& (S.CurrentHunger >= Evo::ReproHungerFraction * Evo::MaxHunger(G));
-			// Health fraction is a cheap fitness proxy: survivors that forage and avoid damage
-			// stay healthy, so mate choice toward high condition favours successful genomes.
-			Agent.Condition = FMath::Clamp(S.CurrentHP / Evo::MaxHP(G), 0.f, 1.f);
+			// Attractiveness is based on health, age and reproduction count
+			// so mate choice toward high attractiveness favours successful genomes.
+			Agent.Attractiveness = FBoidGenomeLibrary::ComputeAttractivenessScore(G, S);
 			Grid->AddAgent(Agent);
 		}
 	});
