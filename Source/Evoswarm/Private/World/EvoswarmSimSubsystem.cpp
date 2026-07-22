@@ -57,11 +57,7 @@ void UEvoswarmSimSubsystem::SetSpeciesInfo(int32 SpeciesIndex, const FString& Na
 	SpeciesStats[SpeciesIndex].Color = Color;
 }
 
-namespace
-{
-	constexpr float HistoryIntervalSec = 0.5f;
-	constexpr int32 HistoryMaxSamples = 160;
-}
+DEFINE_LOG_CATEGORY_STATIC(LogEvoswarmSim, Log, All);
 
 FMassEntityHandle UEvoswarmSimSubsystem::SpawnBoid(const FBoidSpeciesSharedFragment& Shared, const FBoidGenome& Genome, const FVector& Position, int32 Generation)
 {
@@ -163,8 +159,15 @@ void UEvoswarmSimSubsystem::FlushBirths()
 {
 	for (const FBoidBirthRequest& Req : PendingBirths)
 	{
-		SpawnBoid(Req.Shared, Req.Genome, Req.Position, Req.Generation);
-		OnReproduction(Req.Position); // flash + soft blip where the pair bred
+		if (SpawnBoid(Req.Shared, Req.Genome, Req.Position, Req.Generation).IsValid())
+		{
+			// Count only real spawns, attributed to the child's species.
+			if (SpeciesStats.IsValidIndex(Req.Shared.SpeciesIndex))
+			{
+				++SpeciesStats[Req.Shared.SpeciesIndex].TotalBirths;
+			}
+			OnReproduction(Req.Position); // flash + soft blip where the pair bred
+		}
 	}
 	PendingBirths.Reset();
 }
@@ -215,21 +218,145 @@ void UEvoswarmSimSubsystem::Tick(float DeltaTime)
 
 	ElapsedTime += DeltaTime;
 	HistoryTimer += DeltaTime;
-	if (HistoryTimer >= HistoryIntervalSec)
+	if (HistoryTimer >= Evo::StatsSampleInterval)
 	{
 		HistoryTimer = 0.f;
 		SampleHistory();
+		DetectEvents();
 	}
 }
 
 void UEvoswarmSimSubsystem::SampleHistory()
 {
+	auto Push = [](TArray<int32>& History, int32 Value)
+	{
+		History.Add(Value);
+		if (History.Num() > Evo::StatsHistorySamples)
+		{
+			History.RemoveAt(0);
+		}
+	};
+
 	for (FSpeciesLiveStats& S : SpeciesStats)
 	{
-		S.PopHistory.Add(S.Count);
-		if (S.PopHistory.Num() > HistoryMaxSamples)
+		Push(S.PopHistory, S.Count);
+
+		// Births/deaths in this interval = cumulative counters minus the previous sample.
+		const int32 DeathsNow = S.TotalDeaths();
+		Push(S.BirthHistory, S.TotalBirths - S.LastSampledBirths);
+		Push(S.DeathHistory, DeathsNow - S.LastSampledDeaths);
+		S.LastSampledBirths = S.TotalBirths;
+		S.LastSampledDeaths = DeathsNow;
+	}
+}
+
+void UEvoswarmSimSubsystem::NotifyDeath(int32 SpeciesIndex, EDeathCause Cause)
+{
+	if (SpeciesStats.IsValidIndex(SpeciesIndex) && Cause < EDeathCause::Count)
+	{
+		++SpeciesStats[SpeciesIndex].Deaths[static_cast<int32>(Cause)];
+	}
+}
+
+void UEvoswarmSimSubsystem::NotifyKill(int32 KillerSpeciesIndex, int32 VictimSpeciesIndex)
+{
+	if (SpeciesStats.IsValidIndex(KillerSpeciesIndex))
+	{
+		++SpeciesStats[KillerSpeciesIndex].TotalKillsMade;
+	}
+	NotifyDeath(VictimSpeciesIndex, EDeathCause::Predation);
+}
+
+void UEvoswarmSimSubsystem::LogEvent(const FString& Text, const FLinearColor& Color)
+{
+	EventLog.Add(FSimEvent{ ElapsedTime, Text, Color });
+	if (EventLog.Num() > Evo::EventLogMaxEntries)
+	{
+		EventLog.RemoveAt(0);
+	}
+	const int32 Mins = FMath::FloorToInt(ElapsedTime / 60.f);
+	const int32 Secs = FMath::FloorToInt(ElapsedTime) % 60;
+	UE_LOG(LogEvoswarmSim, Log, TEXT("[%d:%02d] %s"), Mins, Secs, *Text);
+}
+
+void UEvoswarmSimSubsystem::DetectEvents()
+{
+	// Runs every stats sample (0.5 s): pure integer/float comparisons over per-species data.
+	for (FSpeciesLiveStats& S : SpeciesStats)
+	{
+		const bool bAlive = S.Count > 0;
+
+		// --- Extinction: had a living population, now zero ---
+		if (S.bWasAlive && !bAlive)
 		{
-			S.PopHistory.RemoveAt(0);
+			S.bWasAlive = false;
+			LogEvent(FString::Printf(TEXT("%s went EXTINCT (peak gen %d, %d born, %d starved, %d eaten)"),
+				*S.Name, S.MaxGeneration, S.TotalBirths,
+				S.DeathCount(EDeathCause::Starvation), S.DeathCount(EDeathCause::Predation)),
+				FLinearColor(0.95f, 0.35f, 0.35f));
+		}
+		else if (bAlive)
+		{
+			S.bWasAlive = true;
+		}
+
+		if (!bAlive)
+		{
+			continue; // the remaining events only make sense for living species
+		}
+
+		// --- Generation milestone: every GenMilestoneStep generations ---
+		if (S.MaxGeneration >= S.LastMilestoneGen + Evo::GenMilestoneStep)
+		{
+			S.LastMilestoneGen = (S.MaxGeneration / Evo::GenMilestoneStep) * Evo::GenMilestoneStep;
+			LogEvent(FString::Printf(TEXT("%s reached generation %d"), *S.Name, S.LastMilestoneGen),
+				FLinearColor(0.40f, 0.70f, 1.0f));
+		}
+
+		// --- Population collapse: pop fell below CollapseFraction of what it was WindowSec ago ---
+		const int32 WindowSamples = FMath::RoundToInt(Evo::CollapseWindowSec / Evo::StatsSampleInterval);
+		if (S.PopHistory.Num() > WindowSamples)
+		{
+			const int32 Then = S.PopHistory[S.PopHistory.Num() - 1 - WindowSamples];
+			if (Then >= Evo::CollapseMinPop
+				&& S.Count < static_cast<int32>(Then * Evo::CollapseFraction)
+				&& ElapsedTime - S.LastCollapseLogTime > Evo::CollapseCooldownSec)
+			{
+				S.LastCollapseLogTime = ElapsedTime;
+				LogEvent(FString::Printf(TEXT("%s population collapsing: %d -> %d in %.0f s"),
+					*S.Name, Then, S.Count, Evo::CollapseWindowSec),
+					FLinearColor(0.95f, 0.62f, 0.25f));
+			}
+		}
+
+		// --- Diet class shift (with hysteresis so a border species doesn't flip-flop) ---
+		int32 NewClass = S.DietClass;
+		if (S.AvgDiet > Evo::DietCarnThreshold + Evo::DietClassHysteresis)
+		{
+			NewClass = 2;
+		}
+		else if (S.AvgDiet < Evo::DietHerbThreshold - Evo::DietClassHysteresis)
+		{
+			NewClass = 0;
+		}
+		else if (S.AvgDiet > Evo::DietHerbThreshold + Evo::DietClassHysteresis
+			&& S.AvgDiet < Evo::DietCarnThreshold - Evo::DietClassHysteresis)
+		{
+			NewClass = 1;
+		}
+
+		if (!S.bDietClassInit)
+		{
+			// First classification is silent: the starting diet isn't an "event".
+			S.bDietClassInit = true;
+			S.DietClass = (S.AvgDiet > Evo::DietCarnThreshold) ? 2 : (S.AvgDiet < Evo::DietHerbThreshold) ? 0 : 1;
+		}
+		else if (NewClass != S.DietClass)
+		{
+			S.DietClass = NewClass;
+			const TCHAR* ClassWord = (NewClass == 0) ? TEXT("herbivorous") : (NewClass == 2) ? TEXT("carnivorous") : TEXT("omnivorous");
+			LogEvent(FString::Printf(TEXT("%s turned %s (avg diet %.2f)"), *S.Name, ClassWord, S.AvgDiet),
+				Evo::DietColor(S.AvgDiet));
 		}
 	}
 }

@@ -1,7 +1,11 @@
 // Copyright Evoswarm.
 //
-// A free-flying spectator pawn (ZQSD via input config) that adds a key binding to toggle
-// the debug visualisation. Otherwise identical to ADefaultPawn.
+// A free-flying spectator pawn (ZQSD via input config) with:
+// - B key: toggle debug visualisation
+// - F key: lock/unlock crosshair inspect
+// - Tick:  center-screen ray -> terrain hit -> grid query -> find the nearest boid,
+//        read its live fragments into the sim subsystem's inspect state, and
+//        draw a selection ring around it.
 
 #pragma once
 
@@ -15,7 +19,10 @@ class EVOSWARM_API AEvoswarmPawn : public ADefaultPawn
 	GENERATED_BODY()
 
 public:
+	AEvoswarmPawn();
+
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+	virtual void Tick(float DeltaTime) override;
 
 private:
 	void ToggleDebug();
@@ -29,4 +36,6 @@ private:
 
 	// Helper pour envoyer le mode au subsystem
 	void ApplyDebugMode(int32 Mode);
+};
+	void ToggleSelect();
 };

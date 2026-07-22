@@ -13,6 +13,7 @@
 #include "MassEntityHandle.h" // Latest include order no longer pulls this in via MassEntityTypes.h
 #include "BoidFragments.h"
 #include "BoidStats.h"
+#include "EvoswarmTuning.h" // NumDietHues, StatsSampleInterval, ... (all inline constexpr)
 #include "EvoswarmSimSubsystem.generated.h"
 
 class UInstancedStaticMeshComponent;
@@ -27,6 +28,54 @@ struct FBoidBirthRequest
 	FBoidGenome Genome;
 	FVector Position = FVector::ZeroVector;
 	int32 Generation = 0;
+};
+
+/** Why a boid died. Predation = eaten outright; Injury = combat wounds (incl. counter-attacks). */
+enum class EDeathCause : uint8
+{
+	Starvation,
+	OldAge,
+	Predation,
+	Injury,
+
+	Count
+};
+static constexpr int32 NumDeathCauses = static_cast<int32>(EDeathCause::Count);
+
+/** One entry in the ecosystem event feed (extinctions, milestones, diet shifts, collapses). */
+struct FSimEvent
+{
+	float Time = 0.f;   // sim time (seconds) when it happened
+	FString Text;
+	FLinearColor Color = FLinearColor::White;
+};
+
+/** Snapshot of one creature's live data for the crosshair inspector panel. */
+struct FBoidInspectState
+{
+	bool bActive = false;          // anything being inspected?
+	bool bLocked = false;          // user pressed the select key
+	bool bDeceased = false;        // locked entity was destroyed
+
+	FMassEntityHandle Entity;
+	int32 SpeciesIndex = -1;
+	FVector Position = FVector::ZeroVector;
+
+	// Copied from fragments each frame by the pawn; frozen when deceased.
+	FBoidGenome Genome;
+	float HP = 0.f;
+	float MaxHP = 0.f;
+	float Stam = 0.f;
+	float MaxStam = 0.f;
+	float Hunger = 0.f;
+	float MaxHunger = 0.f;
+	float Age = 0.f;
+	float Lifespan = 0.f;
+	int32 Generation = 0;
+	int32 ReproCount = 0;
+	float Adrenaline = 0.f;
+	float ReproCooldown = 0.f;
+	float AttackCooldown = 0.f;
 };
 
 /** Per-species live readout, refreshed each frame by the stats processor and shown on the HUD. */
@@ -48,7 +97,62 @@ struct FSpeciesLiveStats
 	int32 MaxGeneration = 0;
 	/** Recent population samples (ring buffer) for the HUD sparkline; oldest first. */
 	TArray<int32> PopHistory;
+
+	/**
+	 * Diet spread across Evo::NumDietHues bins (same bins as the render hues), refreshed each
+	 * frame. This shows speciation the average hides: a species splitting into a herbivore and
+	 * a carnivore sub-population reads as two humps here, but as "omnivore" in AvgDiet.
+	 */
+	TArray<int32> DietHistogram;
+
+	// --- Lifetime totals (since sim start) ---
+	int32 TotalBirths = 0;
+	int32 TotalKillsMade = 0;                 // prey this species has killed
+	int32 Deaths[NumDeathCauses] = { 0 };     // indexed by EDeathCause
+
+	int32 DeathCount(EDeathCause Cause) const { return Deaths[static_cast<int32>(Cause)]; }
+	int32 TotalDeaths() const
+	{
+		int32 Sum = 0;
+		for (int32 I = 0; I < NumDeathCauses; ++I) { Sum += Deaths[I]; }
+		return Sum;
+	}
+
+	/** Births / deaths per sampling interval, aligned with PopHistory (oldest first). */
+	TArray<int32> BirthHistory;
+	TArray<int32> DeathHistory;
+
+	// --- Internal bookkeeping for sampling + event detection (not for display) ---
+	int32 LastSampledBirths = 0;     // TotalBirths at the previous history sample
+	int32 LastSampledDeaths = 0;     // TotalDeaths() at the previous history sample
+	int32 LastMilestoneGen = 0;      // last generation milestone already logged
+	bool bWasAlive = false;          // had a living population (for extinction detection)
+	float LastCollapseLogTime = -1.e9f; // throttles repeated collapse events
+	int32 DietClass = 1;             // 0 = herbivore, 1 = omnivore, 2 = carnivore
+	bool bDietClassInit = false;     // first classification is silent (no "turned X" event)
 };
+
+namespace Evo
+{
+	/** Events per minute over the most recent WindowSec of a per-sample history. */
+	inline float RatePerMinute(const TArray<int32>& History, float WindowSec = RateWindowSec)
+	{
+		const int32 N = History.Num();
+		if (N == 0)
+		{
+			return 0.f;
+		}
+		const int32 WindowSamples = FMath::Max(1, FMath::RoundToInt(WindowSec / StatsSampleInterval));
+		const int32 Use = FMath::Min(WindowSamples, N);
+		int32 Sum = 0;
+		for (int32 I = N - Use; I < N; ++I)
+		{
+			Sum += History[I];
+		}
+		const float Seconds = Use * StatsSampleInterval;
+		return (Seconds > 0.f) ? (Sum * 60.f / Seconds) : 0.f;
+	}
+}
 
 UCLASS()
 class EVOSWARM_API UEvoswarmSimSubsystem : public UTickableWorldSubsystem
@@ -103,7 +207,21 @@ public:
 	void RequestCarcass(const FVector& Position, float Energy);
 	void NotifyFoodConsumed() { FoodCount = FMath::Max(0, FoodCount - 1); }
 
+	// --- Ecosystem event counters (all boid processors run on the game thread, so plain ints) ---
+	/** Record a non-predation death (starvation / old age / combat wounds). */
+	void NotifyDeath(int32 SpeciesIndex, EDeathCause Cause);
+	/** Record a successful hunt: a kill for the killer AND a predation death for the victim. */
+	void NotifyKill(int32 KillerSpeciesIndex, int32 VictimSpeciesIndex);
+
+	// --- Event feed (extinctions, generation milestones, diet shifts, collapses) ---
+	const TArray<FSimEvent>& GetEventLog() const { return EventLog; }
+	void LogEvent(const FString& Text, const FLinearColor& Color);
+
 	float GetElapsedTime() const { return ElapsedTime; }
+
+	// --- Crosshair inspect (pawn writes, HUD reads) ---
+	const FBoidInspectState& GetInspect() const { return Inspect; }
+	FBoidInspectState& GetInspectMutable() { return Inspect; }
 
 	// --- UTickableWorldSubsystem ---
 	virtual void Tick(float DeltaTime) override;
@@ -143,7 +261,9 @@ private:
 	TArray<FBoidBirthRequest> PendingBirths;
 	TArray<TPair<FVector, float>> PendingCarcasses;
 	TArray<FSpeciesLiveStats> SpeciesStats;
+	TArray<FSimEvent> EventLog;
 	void SampleHistory();
+	void DetectEvents();
 
 	FRandomStream Rng = FRandomStream(1337);
 	int32 FoodCount = 0;
@@ -155,4 +275,7 @@ private:
 	
 	/** Mode de debug actif (0: Off, 1: Comportements/FSM, 2: Espèces/Perceptions, 3: ..., 4: ...) */
 	int32 CurrentDebugMode = 0;
+};
+
+	FBoidInspectState Inspect;
 };
