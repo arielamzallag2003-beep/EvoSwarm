@@ -23,7 +23,10 @@ public class Evoswarm : ModuleRules
             "MassCommon",
             "MassMovement",
 			// Code-generated terrain mesh.
-			"ProceduralMeshComponent"
+			"ProceduralMeshComponent",
+            "Slate",
+            "SlateCore",
+            "InputCore"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]

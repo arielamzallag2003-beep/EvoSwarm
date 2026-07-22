@@ -50,6 +50,34 @@ struct FSimEvent
 	FLinearColor Color = FLinearColor::White;
 };
 
+/** Snapshot of one creature's live data for the crosshair inspector panel. */
+struct FBoidInspectState
+{
+	bool bActive = false;          // anything being inspected?
+	bool bLocked = false;          // user pressed the select key
+	bool bDeceased = false;        // locked entity was destroyed
+
+	FMassEntityHandle Entity;
+	int32 SpeciesIndex = -1;
+	FVector Position = FVector::ZeroVector;
+
+	// Copied from fragments each frame by the pawn; frozen when deceased.
+	FBoidGenome Genome;
+	float HP = 0.f;
+	float MaxHP = 0.f;
+	float Stam = 0.f;
+	float MaxStam = 0.f;
+	float Hunger = 0.f;
+	float MaxHunger = 0.f;
+	float Age = 0.f;
+	float Lifespan = 0.f;
+	int32 Generation = 0;
+	int32 ReproCount = 0;
+	float Adrenaline = 0.f;
+	float ReproCooldown = 0.f;
+	float AttackCooldown = 0.f;
+};
+
 /** Per-species live readout, refreshed each frame by the stats processor and shown on the HUD. */
 struct FSpeciesLiveStats
 {
@@ -184,6 +212,10 @@ public:
 
 	float GetElapsedTime() const { return ElapsedTime; }
 
+	// --- Crosshair inspect (pawn writes, HUD reads) ---
+	const FBoidInspectState& GetInspect() const { return Inspect; }
+	FBoidInspectState& GetInspectMutable() { return Inspect; }
+
 	// --- UTickableWorldSubsystem ---
 	virtual void Tick(float DeltaTime) override;
 	virtual bool IsTickable() const override { return bRunning; }
@@ -233,4 +265,6 @@ private:
 
 	float ElapsedTime = 0.f;       // seconds since the sim started
 	float HistoryTimer = 0.f;      // accumulator for population sampling
+
+	FBoidInspectState Inspect;
 };

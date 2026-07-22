@@ -5,6 +5,7 @@
 #include "EvoswarmTuning.h"
 
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -23,10 +24,8 @@
 // ---------------------------------------------------------------------------------------------
 namespace
 {
-	/** A plain white fill brush; tinted per draw call. Self-contained so we depend on no style set. */
 	const FSlateColorBrush GWhiteBrush(FLinearColor::White);
 
-	// Panel palette (mirrors the old Canvas HUD so the visual identity is preserved).
 	const FLinearColor CPanelBg(0.02f, 0.025f, 0.04f, 0.86f);
 	const FLinearColor CWhite(0.92f, 0.94f, 0.97f, 1.f);
 	const FLinearColor CGrey(0.65f, 0.68f, 0.72f, 1.f);
@@ -40,8 +39,8 @@ namespace
 	FSlateFontInfo FontBody() { return FCoreStyle::GetDefaultFontStyle("Regular", 9); }
 	FSlateFontInfo FontSmall() { return FCoreStyle::GetDefaultFontStyle("Regular", 8); }
 
-	/** Fixed panel width, matching the old 494 px Canvas panel. */
 	constexpr float PanelWidth = 500.f;
+	constexpr float InspectWidth = 310.f;
 
 	FText ClockText(float Seconds)
 	{
@@ -50,7 +49,6 @@ namespace
 		return FText::FromString(FString::Printf(TEXT("%d:%02d"), M, S));
 	}
 
-	/** A thin horizontal divider line (self-contained; no style-set dependency). */
 	TSharedRef<SWidget> MakeRule(const FLinearColor& Color, float Height = 1.f)
 	{
 		return SNew(SBox).HeightOverride(Height)
@@ -61,7 +59,7 @@ namespace
 }
 
 // ---------------------------------------------------------------------------------------------
-// SEvoswarmSparkline — population-over-time curve for one species, on a shared vertical scale.
+// SEvoswarmSparkline
 // ---------------------------------------------------------------------------------------------
 class SEvoswarmSparkline : public SLeafWidget
 {
@@ -87,8 +85,6 @@ public:
 		FSlateWindowElementList& Out, int32 LayerId, const FWidgetStyle& Style, bool bParentEnabled) const override
 	{
 		const FVector2D Size = FVector2D(Geometry.GetLocalSize());
-
-		// Track background.
 		FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(), &GWhiteBrush, ESlateDrawEffect::None, CBarBg);
 
 		const UEvoswarmSimSubsystem* S = Sim.Get();
@@ -103,13 +99,13 @@ public:
 				Points.Reserve(N);
 				for (int32 I = 0; I < N; ++I)
 				{
-					const float X = Size.X * (static_cast<float>(I) / (N - 1));
+					const float X = (float)Size.X * (static_cast<float>(I) / (N - 1));
 					const float Frac = FMath::Clamp(static_cast<float>(St.PopHistory[I]) / Max, 0.f, 1.f);
-					const float Y = Size.Y - Size.Y * Frac;
+					const float Y = (float)Size.Y - (float)Size.Y * Frac;
 					Points.Add(FVector2D(X, Y));
 				}
 				FSlateDrawElement::MakeLines(Out, LayerId + 1, Geometry.ToPaintGeometry(), Points,
-					ESlateDrawEffect::None, LineColor, /*bAntialias*/ true, /*Thickness*/ 1.5f);
+					ESlateDrawEffect::None, LineColor, true, 1.5f);
 			}
 		}
 		return LayerId + 1;
@@ -123,8 +119,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
-// SEvoswarmGradientStrip — the diet colour scale, herbivore (green) -> omnivore -> carnivore (red).
-// Used in the legend; the same 3-stop gradient underlies the per-species diet bar.
+// SEvoswarmGradientStrip
 // ---------------------------------------------------------------------------------------------
 class SEvoswarmGradientStrip : public SLeafWidget
 {
@@ -151,9 +146,7 @@ public:
 };
 
 // ---------------------------------------------------------------------------------------------
-// SEvoswarmDietBar — the diet scale with the population HISTOGRAM overlaid and the average marker.
-// The gradient is the axis; the bright bars show where individuals actually sit on it. Two humps
-// mean the species is splitting into diverging diets (speciation the average alone would hide).
+// SEvoswarmDietBar
 // ---------------------------------------------------------------------------------------------
 class SEvoswarmDietBar : public SLeafWidget
 {
@@ -176,7 +169,6 @@ public:
 	{
 		const FVector2D Size = FVector2D(Geometry.GetLocalSize());
 
-		// Diet gradient (the scale).
 		{
 			TArray<FSlateGradientStop> Stops;
 			Stops.Add(FSlateGradientStop(FVector2f(0.f, 0.f), Evo::DietColor(0.f)));
@@ -198,16 +190,13 @@ public:
 				{
 					MaxBin = FMath::Max(MaxBin, Bin);
 				}
-				const float BinW = Size.X / NumBins;
+				const float BinW = (float)Size.X / NumBins;
 				const FLinearColor BarColor(0.97f, 0.98f, 1.f, 0.85f);
 				for (int32 B = 0; B < NumBins; ++B)
 				{
-					if (St.DietHistogram[B] <= 0)
-					{
-						continue;
-					}
+					if (St.DietHistogram[B] <= 0) { continue; }
 					const float Frac = static_cast<float>(St.DietHistogram[B]) / MaxBin;
-					const float H = FMath::Max(1.5f, Size.Y * Frac);
+					const float H = FMath::Max(1.5f, (float)Size.Y * Frac);
 					const float X = BinW * B + 1.f;
 					FSlateDrawElement::MakeBox(Out, LayerId + 1,
 						Geometry.ToPaintGeometry(FVector2f(FMath::Max(1.f, BinW - 2.f), H),
@@ -216,7 +205,6 @@ public:
 				}
 			}
 
-			// Population-average marker (a white tick spanning the bar).
 			const float MarkerX = (float)Size.X * FMath::Clamp(St.AvgDiet, 0.f, 1.f);
 			FSlateDrawElement::MakeBox(Out, LayerId + 2,
 				Geometry.ToPaintGeometry(FVector2f(2.f, (float)Size.Y + 4.f), FSlateLayoutTransform(FVector2f(MarkerX - 1.f, -2.f))),
@@ -231,8 +219,347 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
-// SEvoswarmSpeciesRow — one species: header (swatch/name/gen/count), sparkline, diet bar,
-// averaged genome, and demographics. Text is cached and refreshed on a ~10 Hz throttle.
+// SEvoswarmStatBar painted HP / stamina / hunger bar for the inspector panel.
+// ---------------------------------------------------------------------------------------------
+class SEvoswarmStatBar : public SLeafWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SEvoswarmStatBar) {}
+		SLATE_ATTRIBUTE(float, Fraction)
+		SLATE_ATTRIBUTE(FLinearColor, BarColor)
+		SLATE_ATTRIBUTE(FString, Label)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		FractionAttr = InArgs._Fraction;
+		BarColorAttr = InArgs._BarColor;
+		LabelAttr = InArgs._Label;
+	}
+
+	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(200.f, 14.f); }
+
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& CullRect,
+		FSlateWindowElementList& Out, int32 LayerId, const FWidgetStyle& Style, bool bParentEnabled) const override
+	{
+		const FVector2D Size = FVector2D(Geometry.GetLocalSize());
+
+		// Track background.
+		FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(), &GWhiteBrush, ESlateDrawEffect::None, CBarBg);
+
+		// Filled portion.
+		const float F = FMath::Clamp(FractionAttr.Get(), 0.f, 1.f);
+		if (F > 0.01f)
+		{
+			FSlateDrawElement::MakeBox(Out, LayerId + 1,
+				Geometry.ToPaintGeometry(FVector2f((float)Size.X * F, (float)Size.Y), FSlateLayoutTransform(FVector2f(0.f, 0.f))),
+				&GWhiteBrush, ESlateDrawEffect::None, BarColorAttr.Get());
+		}
+
+		// Label text overlay.
+		const FString Lbl = LabelAttr.Get();
+		if (!Lbl.IsEmpty())
+		{
+			const FSlateFontInfo Font = FontSmall();
+			FSlateDrawElement::MakeText(Out, LayerId + 2,
+				Geometry.ToPaintGeometry(FVector2f((float)Size.X - 6.f, (float)Size.Y),
+					FSlateLayoutTransform(FVector2f(4.f, 0.f))),
+				Lbl, Font, ESlateDrawEffect::None, CWhite);
+		}
+
+		return LayerId + 2;
+	}
+
+private:
+	TAttribute<float> FractionAttr;
+	TAttribute<FLinearColor> BarColorAttr;
+	TAttribute<FString> LabelAttr;
+};
+
+// ---------------------------------------------------------------------------------------------
+// SEvoswarmInspector right-side panel showing the inspected creature's live data.
+// ---------------------------------------------------------------------------------------------
+class SEvoswarmInspector : public SCompoundWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SEvoswarmInspector) {}
+		SLATE_ARGUMENT(TWeakObjectPtr<UEvoswarmSimSubsystem>, Sim)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		Sim = InArgs._Sim;
+
+		// Slate does not tick collapsed widgets, so a panel that collapses itself can never
+		// un-collapse from its own Tick. Keep the ROOT alive (and click-through) and drive the
+		// CONTENT's visibility from a bound attribute instead: the parent evaluates that during
+		// arrangement every frame, whether or not this widget is currently ticking.
+		SetVisibility(EVisibility::SelfHitTestInvisible);
+
+		ChildSlot
+			[
+				SNew(SBox).WidthOverride(InspectWidth)
+					.Visibility(this, &SEvoswarmInspector::ContentVisibility)
+					[
+						SNew(SBorder)
+							.BorderImage(&GWhiteBrush)
+							.BorderBackgroundColor(CPanelBg)
+							.Padding(FMargin(12.f, 10.f))
+							[
+								SNew(SVerticalBox)
+
+									// Accent strip.
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(SBox).HeightOverride(3.f)
+											[
+												SAssignNew(AccentImage, SImage).Image(&GWhiteBrush).ColorAndOpacity(CAccent)
+											]
+									]
+
+									// Header: swatch + species name.
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+									[
+										SNew(SHorizontalBox)
+											+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
+											[
+												SNew(SBox).WidthOverride(12.f).HeightOverride(12.f)
+													[
+														SAssignNew(SwatchImage, SImage).Image(&GWhiteBrush).ColorAndOpacity(CWhite)
+													]
+											]
+											+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+											[
+												SNew(STextBlock).Font(FontName()).ColorAndOpacity(FSlateColor(CWhite))
+													.Text_Lambda([this] { return SpeciesText; })
+											]
+									]
+
+								// Generation + age / lifespan.
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+									[
+										SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return GenAgeText; })
+									]
+
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+
+									// HP bar.
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+									[
+										SNew(SBox).HeightOverride(14.f)
+											[
+												SNew(SEvoswarmStatBar)
+													.Fraction_Lambda([this] { return HPFrac; })
+													.BarColor_Lambda([this] { return FMath::Lerp(FLinearColor(0.85f, 0.2f, 0.2f), FLinearColor(0.3f, 0.85f, 0.35f), HPFrac); })
+													.Label_Lambda([this] { return HPLabel; })
+											]
+									]
+								// Stamina bar.
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+									[
+										SNew(SBox).HeightOverride(14.f)
+											[
+												SNew(SEvoswarmStatBar)
+													.Fraction_Lambda([this] { return StamFrac; })
+													.BarColor(FLinearColor(0.85f, 0.75f, 0.25f))
+													.Label_Lambda([this] { return StamLabel; })
+											]
+									]
+								// Hunger bar.
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+									[
+										SNew(SBox).HeightOverride(14.f)
+											[
+												SNew(SEvoswarmStatBar)
+													.Fraction_Lambda([this] { return HungerFrac; })
+													.BarColor(FLinearColor(0.90f, 0.55f, 0.18f))
+													.Label_Lambda([this] { return HungerLabel; })
+											]
+									]
+
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+
+									// Full genome (compact, 4 lines).
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+									[
+										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return GenomeLine1; })
+									]
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return GenomeLine2; })
+									]
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return GenomeLine3; })
+									]
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return GenomeLine4; })
+									]
+
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+
+									// Live state (adrenaline, cooldowns, repro count).
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return StateLine1; })
+									]
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+											.Text_Lambda([this] { return StateLine2; })
+									]
+
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+
+									// Status / instruction line.
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(STextBlock).Font(FontBody())
+											.ColorAndOpacity_Lambda([this] { return StatusColor; })
+											.Text_Lambda([this] { return StatusText; })
+									]
+							]
+					]
+			];
+	}
+
+	virtual void Tick(const FGeometry& Geometry, const double CurrentTime, const float DeltaTime) override
+	{
+		SCompoundWidget::Tick(Geometry, CurrentTime, DeltaTime);
+
+		const UEvoswarmSimSubsystem* S = Sim.Get();
+		if (!S)
+		{
+			return;
+		}
+
+		const FBoidInspectState& Ins = S->GetInspect();
+		if (!Ins.bActive)
+		{
+			return;
+		}
+
+		// ~10 Hz text refresh, but a newly picked creature must not wait for the next slot,
+		// or the panel pops up showing the previous subject's numbers for up to 100 ms.
+		const bool bNewSubject = (Ins.Entity != LastEntity) || (Ins.bDeceased != bLastDeceased);
+		RefreshTimer += DeltaTime;
+		if (RefreshTimer < 0.1f && !bNewSubject)
+		{
+			return;
+		}
+		RefreshTimer = 0.f;
+		LastEntity = Ins.Entity;
+		bLastDeceased = Ins.bDeceased;
+
+		// --- Species identity ---
+		FString Name = TEXT("???");
+		FLinearColor Color = CWhite;
+		if (S->GetSpeciesStats().IsValidIndex(Ins.SpeciesIndex))
+		{
+			const FSpeciesLiveStats& Sp = S->GetSpeciesStats()[Ins.SpeciesIndex];
+			Name = Sp.Name;
+			Color = Sp.Color;
+		}
+
+		if (Ins.bDeceased)
+		{
+			SpeciesText = FText::FromString(FString::Printf(TEXT("\x2620 %s  DECEASED"), *Name));
+			AccentImage->SetColorAndOpacity(FLinearColor(0.8f, 0.2f, 0.2f));
+		}
+		else
+		{
+			SpeciesText = FText::FromString(Name);
+			AccentImage->SetColorAndOpacity(Color);
+		}
+		SwatchImage->SetColorAndOpacity(Color);
+
+		GenAgeText = FText::FromString(FString::Printf(TEXT("Gen %d    Age %.1fs / %.0fs"),
+			Ins.Generation, Ins.Age, Ins.Lifespan));
+
+		// --- Vital bars ---
+		HPFrac = (Ins.MaxHP > 0.f) ? FMath::Clamp(Ins.HP / Ins.MaxHP, 0.f, 1.f) : 0.f;
+		StamFrac = (Ins.MaxStam > 0.f) ? FMath::Clamp(Ins.Stam / Ins.MaxStam, 0.f, 1.f) : 0.f;
+		HungerFrac = (Ins.MaxHunger > 0.f) ? FMath::Clamp(Ins.Hunger / Ins.MaxHunger, 0.f, 1.f) : 0.f;
+
+		HPLabel = FString::Printf(TEXT("HP  %.0f / %.0f"), Ins.HP, Ins.MaxHP);
+		StamLabel = FString::Printf(TEXT("STA  %.0f / %.0f"), Ins.Stam, Ins.MaxStam);
+		HungerLabel = FString::Printf(TEXT("HUN  %.0f / %.0f"), Ins.Hunger, Ins.MaxHunger);
+
+		// --- Full genome ---
+		const FBoidGenome& G = Ins.Genome;
+		GenomeLine1 = FText::FromString(FString::Printf(TEXT("HP %.1f  Arm %.1f  Dmg %.1f  Intim %.1f"),
+			G.Get(EBoidStat::HP), G.Get(EBoidStat::Armor), G.Get(EBoidStat::Damage), G.Get(EBoidStat::Intimidation)));
+		GenomeLine2 = FText::FromString(FString::Printf(TEXT("Walk %.1f  Run %.1f  Sta %.1f  Aggr %.1f"),
+			G.Get(EBoidStat::WalkSpeed), G.Get(EBoidStat::RunSpeed), G.Get(EBoidStat::Stamina), G.Get(EBoidStat::Aggressiveness)));
+		GenomeLine3 = FText::FromString(FString::Printf(TEXT("Per %.1f  Stl %.1f  Hun %.1f  Bio %.1f"),
+			G.Get(EBoidStat::Perception), G.Get(EBoidStat::Stealth), G.Get(EBoidStat::Hunger), G.Get(EBoidStat::Biomass)));
+
+		const TCHAR* DietWord = (G.Get(EBoidStat::Diet) < Evo::DietHerbThreshold) ? TEXT("herb")
+			: (G.Get(EBoidStat::Diet) > Evo::DietCarnThreshold ? TEXT("carn") : TEXT("omni"));
+		GenomeLine4 = FText::FromString(FString::Printf(TEXT("Diet %.2f (%s)  Life %.1f  Repr %.1f  Mut %.2f  Int %.1f  Reg %.1f"),
+			G.Get(EBoidStat::Diet), DietWord, G.Get(EBoidStat::Lifespan), G.Get(EBoidStat::ReproductionRate),
+			G.Get(EBoidStat::MutationRate), G.Get(EBoidStat::Integration), G.Get(EBoidStat::Regeneration)));
+
+		// --- Live state ---
+		StateLine1 = FText::FromString(FString::Printf(TEXT("Repro x%d    Adrenaline %.1fs"),
+			Ins.ReproCount, Ins.Adrenaline));
+		StateLine2 = FText::FromString(FString::Printf(TEXT("Cooldowns:  atk %.1f    repro %.1f"),
+			Ins.AttackCooldown, Ins.ReproCooldown));
+
+		// --- Status ---
+		if (Ins.bDeceased)
+		{
+			StatusText = LOCTEXT("StatusDead", "DECEASED  \x2014  F to dismiss");
+			StatusColor = FSlateColor(FLinearColor(0.85f, 0.35f, 0.35f));
+		}
+		else if (Ins.bLocked)
+		{
+			StatusText = LOCTEXT("StatusLocked", "\x25C9 LOCKED  \x2014  F to unlock");
+			StatusColor = FSlateColor(FLinearColor(1.f, 0.85f, 0.25f));
+		}
+		else
+		{
+			StatusText = LOCTEXT("StatusHover", "F to lock on this creature");
+			StatusColor = FSlateColor(CGrey);
+		}
+	}
+
+private:
+	/* Bound attribute: evaluated by the parent during arrangement, so it works while collapsed. */
+	EVisibility ContentVisibility() const
+	{
+		const UEvoswarmSimSubsystem* S = Sim.Get();
+		return (S && S->GetInspect().bActive) ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+	}
+
+	TWeakObjectPtr<UEvoswarmSimSubsystem> Sim;
+	float RefreshTimer = 0.f;
+
+	// Change tracking, so switching subject refreshes the text on the very next tick.
+	FMassEntityHandle LastEntity;
+	bool bLastDeceased = false;
+
+	TSharedPtr<SImage> AccentImage;
+	TSharedPtr<SImage> SwatchImage;
+
+	FText SpeciesText, GenAgeText;
+	float HPFrac = 0.f, StamFrac = 0.f, HungerFrac = 0.f;
+	FString HPLabel, StamLabel, HungerLabel;
+	FText GenomeLine1, GenomeLine2, GenomeLine3, GenomeLine4;
+	FText StateLine1, StateLine2;
+	FText StatusText;
+	FSlateColor StatusColor = FSlateColor(CGrey);
+};
+
+// ---------------------------------------------------------------------------------------------
+// SEvoswarmSpeciesRow
 // ---------------------------------------------------------------------------------------------
 class SEvoswarmSpeciesRow : public SCompoundWidget
 {
@@ -257,22 +584,19 @@ public:
 			}
 		}
 
-		Refresh(); // seed cached strings so the row isn't blank on frame 1
+		Refresh();
 
 		ChildSlot
 			[
 				SNew(SVerticalBox)
 
-					// --- Header: colour swatch, name, gen, count ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 					[
 						SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
 							[
 								SNew(SBox).WidthOverride(12.f).HeightOverride(12.f)
-									[
-										SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(SpeciesColor)
-									]
+									[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(SpeciesColor)]
 							]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							[
@@ -291,7 +615,6 @@ public:
 							]
 					]
 
-				// --- Population sparkline ---
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 					[
 						SNew(SBox).HeightOverride(20.f)
@@ -301,16 +624,12 @@ public:
 							]
 					]
 
-				// --- Diet gradient + histogram + average marker ---
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 2.f)
 					[
 						SNew(SBox).HeightOverride(12.f)
-							[
-								SNew(SEvoswarmDietBar).Sim(Sim).SpeciesIndex(SpeciesIndex)
-							]
+							[SNew(SEvoswarmDietBar).Sim(Sim).SpeciesIndex(SpeciesIndex)]
 					]
 
-					// --- Averaged genome (two lines) ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 0.f)
 					[
 						SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
@@ -322,7 +641,6 @@ public:
 							.Text_Lambda([this] { return GenomeLine2; })
 					]
 
-					// --- Demographics: births/deaths + rates + kills ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
 					[
 						SNew(SHorizontalBox)
@@ -342,7 +660,6 @@ public:
 									.Text_Lambda([this] { return KillsText; })
 							]
 					]
-				// --- Death-cause breakdown ---
 				+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
@@ -350,9 +667,7 @@ public:
 					]
 
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)
-					[
-						MakeRule(FLinearColor(1.f, 1.f, 1.f, 0.06f))
-					]
+					[MakeRule(FLinearColor(1.f, 1.f, 1.f, 0.06f))]
 			];
 	}
 
@@ -360,7 +675,7 @@ public:
 	{
 		SCompoundWidget::Tick(Geometry, CurrentTime, DeltaTime);
 		RefreshTimer += DeltaTime;
-		if (RefreshTimer >= 0.1f) // ~10 Hz
+		if (RefreshTimer >= 0.1f)
 		{
 			RefreshTimer = 0.f;
 			Refresh();
@@ -371,10 +686,7 @@ private:
 	void Refresh()
 	{
 		const UEvoswarmSimSubsystem* S = Sim.Get();
-		if (!S || !S->GetSpeciesStats().IsValidIndex(SpeciesIndex))
-		{
-			return;
-		}
+		if (!S || !S->GetSpeciesStats().IsValidIndex(SpeciesIndex)) { return; }
 		const FSpeciesLiveStats& St = S->GetSpeciesStats()[SpeciesIndex];
 
 		NameText = FText::FromString(St.Name);
@@ -409,7 +721,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
-// SEvoswarmHUD (root)
+// SEvoswarmHUD (root) full-viewport SOverlay: left panel + right inspector + crosshair dot.
 // ---------------------------------------------------------------------------------------------
 void SEvoswarmHUD::Construct(const FArguments& InArgs)
 {
@@ -418,7 +730,7 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 
 	RefreshGlobalBar(0.f);
 
-	// Legend row: colour swatch scale (diet) + the shape/brightness cheat-sheet.
+	// Legend.
 	TSharedRef<SWidget> Legend =
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
@@ -427,9 +739,7 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 				.Text(LOCTEXT("LegendDiet", "DIET  herbivore \x2192 omnivore \x2192 carnivore"))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
-		[
-			SNew(SBox).HeightOverride(8.f)[SNew(SEvoswarmGradientStrip)]
-		]
+		[SNew(SBox).HeightOverride(8.f)[SNew(SEvoswarmGradientStrip)]]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
 		[
 			SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
@@ -441,82 +751,89 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 				.Text(LOCTEXT("LegendShape", "silhouette  bulk: HP \x00b7 length: run speed \x00b7 width: armour"))
 		];
 
-	ChildSlot
-		.HAlign(HAlign_Left)
-		.VAlign(VAlign_Top)
-		.Padding(24.f)
+	// Left ecosystem panel.
+	TSharedRef<SWidget> LeftPanel =
+		SNew(SBox).WidthOverride(PanelWidth)
 		[
-			SNew(SBox).WidthOverride(PanelWidth)
+			SNew(SBorder)
+				.BorderImage(&GWhiteBrush)
+				.BorderBackgroundColor(CPanelBg)
+				.Padding(FMargin(14.f, 12.f))
 				[
-					SNew(SBorder)
-						.BorderImage(&GWhiteBrush)
-						.BorderBackgroundColor(CPanelBg)
-						.Padding(FMargin(14.f, 12.f))
+					SNew(SVerticalBox)
+
+						+ SVerticalBox::Slot().AutoHeight()
+						[SNew(SBox).HeightOverride(3.f)[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(CAccent)]]
+
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 						[
-							SNew(SVerticalBox)
-
-								// Top accent strip.
-								+ SVerticalBox::Slot().AutoHeight()
+							SNew(STextBlock).Font(FontTitle()).ColorAndOpacity(FSlateColor(CWhite))
+								.Text(LOCTEXT("Title", "EVOSWARM"))
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+						[
+							SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 								[
-									SNew(SBox).HeightOverride(3.f)[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(CAccent)]
+									SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
+										.Text_Lambda([this] { return SummaryText; })
 								]
-
-								// --- Global bar ---
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+								+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 								[
-									SNew(STextBlock).Font(FontTitle()).ColorAndOpacity(FSlateColor(CWhite))
-										.Text(LOCTEXT("Title", "EVOSWARM"))
-								]
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-										[
-											SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
-												.Text_Lambda([this] { return SummaryText; })
-										]
-										+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-										[
-											SNew(STextBlock).Font(FontBody())
-												.ColorAndOpacity_Lambda([this] { return FpsColor; })
-												.Text_Lambda([this] { return FpsText; })
-										]
-								]
-
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-								[
-									MakeRule(FLinearColor(1.f, 1.f, 1.f, 0.08f))
-								]
-
-								// --- Legend ---
-								+ SVerticalBox::Slot().AutoHeight()[Legend]
-
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)
-								[
-									MakeRule(FLinearColor(1.f, 1.f, 1.f, 0.08f))
-								]
-
-								// --- Per-species rows (filled lazily once the sim reports species) ---
-								+ SVerticalBox::Slot().AutoHeight()
-								[
-									SAssignNew(SpeciesContainer, SVerticalBox)
-								]
-
-								// --- Event feed header ---
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 4.f)
-								[
-									SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
-										.Text(LOCTEXT("Events", "EVENTS"))
-								]
-								// --- Scrollable event feed ---
-								+ SVerticalBox::Slot().AutoHeight()
-								[
-									SNew(SBox).HeightOverride(120.f)
-										[
-											SAssignNew(EventScroll, SScrollBox)
-										]
+									SNew(STextBlock).Font(FontBody())
+										.ColorAndOpacity_Lambda([this] { return FpsColor; })
+										.Text_Lambda([this] { return FpsText; })
 								]
 						]
+
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+						+ SVerticalBox::Slot().AutoHeight()[Legend]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+
+						+ SVerticalBox::Slot().AutoHeight()
+						[SAssignNew(SpeciesContainer, SVerticalBox)]
+
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 4.f)
+						[
+							SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+								.Text(LOCTEXT("Events", "EVENTS"))
+						]
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SBox).HeightOverride(120.f)
+								[SAssignNew(EventScroll, SScrollBox)]
+						]
+				]
+		];
+
+	// --- Root: full-viewport overlay ---
+	ChildSlot
+		[
+			SNew(SOverlay)
+
+				// Left panel.
+				+ SOverlay::Slot()
+				.HAlign(HAlign_Left)
+				.VAlign(VAlign_Top)
+				.Padding(24.f)
+				[LeftPanel]
+
+				// Right inspector panel.
+				+ SOverlay::Slot()
+				.HAlign(HAlign_Right)
+				.VAlign(VAlign_Center)
+				.Padding(24.f)
+				[
+					SNew(SEvoswarmInspector).Sim(Sim)
+				]
+
+				// Center-screen crosshair dot (tiny, always visible).
+				+ SOverlay::Slot()
+				.HAlign(HAlign_Center)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SBox).WidthOverride(6.f).HeightOverride(6.f)
+						[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(FLinearColor(1.f, 1.f, 1.f, 0.35f))]
 				]
 		];
 }
@@ -524,10 +841,7 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 void SEvoswarmHUD::BuildSpeciesRows()
 {
 	const UEvoswarmSimSubsystem* S = Sim.Get();
-	if (!S || !SpeciesContainer.IsValid())
-	{
-		return;
-	}
+	if (!S || !SpeciesContainer.IsValid()) { return; }
 
 	SpeciesContainer->ClearChildren();
 	const int32 Num = S->GetSpeciesStats().Num();
@@ -543,7 +857,6 @@ void SEvoswarmHUD::BuildSpeciesRows()
 
 void SEvoswarmHUD::RefreshGlobalBar(float DeltaTime)
 {
-	// Smoothed FPS (exponential moving average) reads more steadily than a raw per-frame value.
 	if (DeltaTime > 0.f)
 	{
 		const float Instant = 1.f / DeltaTime;
@@ -551,9 +864,7 @@ void SEvoswarmHUD::RefreshGlobalBar(float DeltaTime)
 	}
 
 	const UEvoswarmSimSubsystem* S = Sim.Get();
-	int32 TotalPop = 0;
-	int32 PeakGen = 0;
-	int32 FoodCount = 0;
+	int32 TotalPop = 0, PeakGen = 0, FoodCount = 0;
 	float Elapsed = 0.f;
 	int32 NewMax = 1;
 	if (S)
@@ -587,21 +898,14 @@ void SEvoswarmHUD::RefreshGlobalBar(float DeltaTime)
 void SEvoswarmHUD::RefreshEventFeed()
 {
 	const UEvoswarmSimSubsystem* S = Sim.Get();
-	if (!S || !EventScroll.IsValid())
-	{
-		return;
-	}
+	if (!S || !EventScroll.IsValid()) { return; }
 
 	const TArray<FSimEvent>& Events = S->GetEventLog();
-	// Only rebuild when the count changes, so the feed stays freely scrollable between events.
-	if (Events.Num() == LastEventCount)
-	{
-		return;
-	}
+	if (Events.Num() == LastEventCount) { return; }
 	LastEventCount = Events.Num();
 
 	EventScroll->ClearChildren();
-	for (const FSimEvent& E : Events) // oldest first -> newest lands at the bottom
+	for (const FSimEvent& E : Events)
 	{
 		EventScroll->AddSlot().Padding(0.f, 1.f)
 			[
@@ -619,14 +923,13 @@ void SEvoswarmHUD::RefreshEventFeed()
 					]
 			];
 	}
-	EventScroll->ScrollToEnd(); // reveal the newest event
+	EventScroll->ScrollToEnd();
 }
 
 void SEvoswarmHUD::Tick(const FGeometry& Geometry, const double CurrentTime, const float DeltaTime)
 {
 	SCompoundWidget::Tick(Geometry, CurrentTime, DeltaTime);
 
-	// Build the species rows once the sim is up and reporting species.
 	if (!bRowsBuilt)
 	{
 		if (const UEvoswarmSimSubsystem* S = Sim.Get())
@@ -639,7 +942,7 @@ void SEvoswarmHUD::Tick(const FGeometry& Geometry, const double CurrentTime, con
 	}
 
 	RefreshTimer += DeltaTime;
-	if (RefreshTimer >= 0.1f) // ~10 Hz for text + event feed
+	if (RefreshTimer >= 0.1f)
 	{
 		RefreshGlobalBar(RefreshTimer);
 		RefreshEventFeed();
