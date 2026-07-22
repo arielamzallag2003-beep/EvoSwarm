@@ -187,9 +187,13 @@ public:
 	/** Enable food regrowth + birth flushing. The game mode calls this once the world is built. */
 	void StartSimulation() { bRunning = true; }
 
-	// --- Debug visualisation (toggled by a key) ---
+	// --- Debug visualisation (B toggles it on/off, numpad 0-4 picks the overlay) ---
 	void ToggleDebugDraw() { bDebugDraw = !bDebugDraw; }
 	bool IsDebugDraw() const { return bDebugDraw; }
+
+	/** 0 = markers, 1 = perception, 2 = behaviour state, 3 = vitals, 4 = everything. */
+	void SetDebugMode(int32 NewMode);
+	int32 GetDebugMode() const { return CurrentDebugMode; }
 
 	// --- Spawning (safe: invoked outside Mass processing) ---
 	FMassEntityHandle SpawnBoid(const FBoidSpeciesSharedFragment& Shared, const FBoidGenome& Genome, const FVector& Position, int32 Generation = 0);
@@ -262,6 +266,7 @@ private:
 	int32 FoodCount = 0;
 	bool bRunning = false;
 	bool bDebugDraw = false;
+	int32 CurrentDebugMode = 0;
 
 	float ElapsedTime = 0.f;       // seconds since the sim started
 	float HistoryTimer = 0.f;      // accumulator for population sampling

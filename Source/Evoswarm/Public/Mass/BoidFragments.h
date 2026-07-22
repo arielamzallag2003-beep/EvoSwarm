@@ -22,6 +22,22 @@ struct EVOSWARM_API FBoidGenomeFragment : public FMassFragment
 	FBoidGenome Genome;
 };
 
+/**
+ * Coarse behaviour state. Decided once per frame by the steering processor and read by
+ * everything downstream (movement, feeding, metabolism, debug draw). Priority order is
+ * danger > exhaustion > breeding > feeding, so only one state can be active at a time.
+ */
+UENUM()
+enum class EBoidState : uint8
+{
+	Wandering,   // default: meandering and flocking, no pressing need
+	Foraging,    // hungry, steering toward food
+	Hunting,     // hungry carnivore closing on live prey
+	Fleeing,     // a higher-tier predator is in range, or recently took a hit
+	Mating,      // ready to breed and steering toward a chosen partner
+	Sleeping     // resting: does not move or feed, burns little, heals fast
+};
+
 /** Per-frame mutable life state. */
 USTRUCT()
 struct EVOSWARM_API FBoidStateFragment : public FMassFragment
@@ -54,9 +70,12 @@ struct EVOSWARM_API FBoidStateFragment : public FMassFragment
 
 	/** Generations from the founding population (0 = initial spawn). Offspring = parent + 1. */
 	int32 Generation = 0;
-	
+
 	// Nombre de fois ou l'individu s'est reproduit
 	int32 ReproductionCount = 0;
+
+	/** Current behaviour. Written by the steering processor, read by everyone else. */
+	EBoidState CurrentBehaviorState = EBoidState::Wandering;
 };
 
 /** What kind of food an entity is. */

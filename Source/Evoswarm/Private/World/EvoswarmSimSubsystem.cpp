@@ -229,13 +229,13 @@ void UEvoswarmSimSubsystem::Tick(float DeltaTime)
 void UEvoswarmSimSubsystem::SampleHistory()
 {
 	auto Push = [](TArray<int32>& History, int32 Value)
-	{
-		History.Add(Value);
-		if (History.Num() > Evo::StatsHistorySamples)
 		{
-			History.RemoveAt(0);
-		}
-	};
+			History.Add(Value);
+			if (History.Num() > Evo::StatsHistorySamples)
+			{
+				History.RemoveAt(0);
+			}
+		};
 
 	for (FSpeciesLiveStats& S : SpeciesStats)
 	{
@@ -460,4 +460,12 @@ void UEvoswarmSimSubsystem::PlayBirthBlip()
 	}
 
 	BirthSound->QueueAudio(reinterpret_cast<const uint8*>(Pcm.GetData()), Pcm.Num() * sizeof(int16));
+}
+
+void UEvoswarmSimSubsystem::SetDebugMode(int32 NewMode)
+{
+	// On s'assure que le mode reste bien compris entre 0 et 4.
+	CurrentDebugMode = FMath::Clamp(NewMode, 0, 4);
+
+	UE_LOG(LogTemp, Log, TEXT("Evoswarm debug mode set to %d"), CurrentDebugMode);
 }
