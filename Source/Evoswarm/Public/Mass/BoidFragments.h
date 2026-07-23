@@ -68,6 +68,14 @@ struct EVOSWARM_API FBoidStateFragment : public FMassFragment
 	/** Persistent wander heading (radians); drifts slowly for smooth, non-jittery meandering. */
 	float WanderAngle = 0.f;
 
+	/**
+	 * Locomotion cycle phase in [0, 2*PI). Advanced by DISTANCE TRAVELLED (not by elapsed time)
+	 * in the movement processor, so the stride rate follows ground speed and the feet don't
+	 * skate during acceleration. Consumed by the render processor for the procedural gait.
+	 * Purely cosmetic: no gameplay processor reads it back.
+	 */
+	float GaitPhase = 0.f;
+
 	/** Generations from the founding population (0 = initial spawn). Offspring = parent + 1. */
 	int32 Generation = 0;
 

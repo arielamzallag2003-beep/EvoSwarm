@@ -26,6 +26,8 @@ void UBoidMovementProcessor::ConfigureQueries(const TSharedRef<FMassEntityManage
 	EntityQuery.AddRequirement<FMassForceFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddRequirement<FBoidGenomeFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FBoidStateFragment>(EMassFragmentAccess::ReadWrite);
+	// Species index feeds the per-species stride multiplier (purely cosmetic gait variation).
+	EntityQuery.AddSharedRequirement<FBoidSpeciesSharedFragment>(EMassFragmentAccess::ReadOnly);
 }
 
 void UBoidMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
@@ -38,6 +40,10 @@ void UBoidMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			const TArrayView<FMassForceFragment> Force = Context.GetMutableFragmentView<FMassForceFragment>();
 			const TConstArrayView<FBoidGenomeFragment> Gen = Context.GetFragmentView<FBoidGenomeFragment>();
 			const TArrayView<FBoidStateFragment> State = Context.GetMutableFragmentView<FBoidStateFragment>();
+
+			// One species per chunk (shared fragments dedupe the archetype), so hoist this out.
+			const FBoidSpeciesSharedFragment& Species = Context.GetSharedFragment<FBoidSpeciesSharedFragment>();
+			const float SpeciesStride = Evo::SpeciesGaitScale(Species.SpeciesIndex);
 
 			for (FMassExecutionContext::FEntityIterator It = Context.CreateEntityIterator(); It; ++It)
 			{
@@ -109,6 +115,17 @@ void UBoidMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 				FVector V = FMath::VInterpTo(Vel[It].Value, Target, Dt, Evo::ForceSmoothing);
 				V.Z = 0.f;
 				Vel[It].Value = V;
+
+				// --- Gait phase (cosmetic) ----------------------------------------------
+				// Advance the locomotion cycle by DISTANCE TRAVELLED rather than elapsed time,
+				// so the stride rate follows ground speed and the feet don't skate during
+				// acceleration. One cycle == two footfalls, hence PI (not 2*PI) per stride.
+				// Sleeping boids never reach here (they continue out above), so their phase
+				// correctly freezes where they lay down.
+				{
+					const float Stride = Evo::StrideLength(G) * SpeciesStride;
+					S.GaitPhase = FMath::Fmod(S.GaitPhase + V.Size2D() * Dt * PI / Stride, 2.f * PI);
+				}
 
 				Loc.X = FMath::Clamp(Loc.X + V.X * Dt, -Evo::ArenaHalfExtent, Evo::ArenaHalfExtent);
 				Loc.Y = FMath::Clamp(Loc.Y + V.Y * Dt, -Evo::ArenaHalfExtent, Evo::ArenaHalfExtent);
