@@ -169,6 +169,29 @@ namespace Evo
 	inline constexpr float BodyStreamlineFromSpeed = 0.022f; // longer/leaner with run speed
 	inline constexpr float BodyWidthFromArmor = 0.03f; // broader with armour
 
+	// --- Procedural gait (render-only; never written back into the simulation) ---
+	// The phase is integrated per-entity in the movement processor and consumed by the render
+	// processor, which offsets the LOCAL render transform only. Every amplitude is gated by
+	// normalised speed, so a walk is subtle and a sprint emphatic from a single formula.
+	inline constexpr float GaitStrideBase = 80.f;   // cm travelled per footfall at body length 1
+	inline constexpr float GaitStrideFromLength = 70.f;   // longer bodies take longer, slower strides
+	inline constexpr float GaitBobAmp = 16.f;   // cm of vertical bounce at full sprint
+	inline constexpr float GaitRollAmpDeg = 7.f;    // side-to-side sway (degrees) at full sprint
+	inline constexpr float GaitPitchAmpDeg = 4.5f;  // nose dip per footfall (degrees)
+	inline constexpr float GaitSquash = 0.07f; // squash/stretch fraction per step
+	inline constexpr float GaitBobFromBiomass = 0.020f; // heavy creatures bounce less, per Biomass point
+	inline constexpr float GaitSpeciesSpread = 0.15f; // +/- stride variation between species
+	inline constexpr float GaitLimpHPFraction = 0.35f; // below this HP fraction the gait goes uneven
+	inline constexpr float GaitLimpAmount = 0.55f; // how far the weak leg collapses
+	inline constexpr float GaitStaggerAmpDeg = 7.f;    // extra roll wobble while starving
+	inline constexpr float GaitIdleSpeedFrac = 0.06f; // below this fraction of run speed = idle
+	inline constexpr float GaitBreatheAmp = 0.018f;// idle (awake) breathing scale amplitude
+	inline constexpr float GaitBreatheFreq = 1.2f;  // idle (awake) breathing rad/s
+	inline constexpr float GaitSleepBreatheAmp = 0.045f;// asleep: deeper breaths, clearly readable
+	inline constexpr float GaitSleepBreatheFreq = 0.45f; // asleep: and much slower
+	inline constexpr float GaitStaggerFreq = 1.7f;  // starvation wobble rad/s (deliberately off-beat)
+	inline constexpr float GaitMaxPhaseStep = 1.2f;  // rad/frame above which the gait fades (aliasing guard)
+
 	// Derived helpers ---------------------------------------------------------
 	inline float MaxHP(const FBoidGenome& G) { return FMath::Max(1.f, G.Get(EBoidStat::HP) * MaxHPScale); }
 	inline float MaxStamina(const FBoidGenome& G) { return FMath::Max(1.f, G.Get(EBoidStat::Stamina) * MaxStaminaScale); }
@@ -258,5 +281,27 @@ namespace Evo
 		const float Length = 1.2f + BodyStreamlineFromSpeed * G.Get(EBoidStat::RunSpeed);
 		const float Width = 0.7f + BodyWidthFromArmor * G.Get(EBoidStat::Armor);
 		return FVector(Size * Length, Size * Width, Size * 0.7f);
+	}
+
+	// --- Gait helpers (must follow BodyScale, which StrideLength depends on) --------------
+	/**
+	 * Distance in cm travelled per footfall. Scales with the individual's fore-aft body extent,
+	 * so large creatures take long slow strides and small ones scurry. Silhouette and locomotion
+	 * stay consistent because both derive from BodyScale.
+	 */
+	inline float StrideLength(const FBoidGenome& G)
+	{
+		return FMath::Max(25.f, GaitStrideBase + GaitStrideFromLength * BodyScale(G).X);
+	}
+
+	/**
+	 * Deterministic per-species stride multiplier in [1-Spread, 1+Spread], so a herbivore herd
+	 * reads visibly differently from a predator pack even at the same speed. Hash-based: stable
+	 * across runs, no state, and no table to maintain when species are added.
+	 */
+	inline float SpeciesGaitScale(int32 SpeciesIndex)
+	{
+		const float H = FMath::Frac(FMath::Sin((SpeciesIndex + 1) * 12.9898f) * 43758.5453f);
+		return 1.f + (H * 2.f - 1.f) * GaitSpeciesSpread;
 	}
 }
