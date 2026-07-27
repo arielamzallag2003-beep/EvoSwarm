@@ -130,6 +130,8 @@ protected:
 	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 	FMassEntityQuery EntityQuery;
+	/** Counts standing plants vs carcasses for the analytics food-web page. */
+	FMassEntityQuery FoodQuery;
 };
 
 /** Renders boids into diet-colour buckets (colour from diet, size from genome) and food/carcasses. */

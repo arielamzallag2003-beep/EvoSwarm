@@ -157,6 +157,15 @@ namespace Evo
 	inline constexpr float DietHerbThreshold = 0.35f;  // avg diet below this = herbivore
 	inline constexpr float DietClassHysteresis = 0.05f;  // must cross the border by this much to switch class
 
+	// --- Analytics dashboard (G overlay) ---
+	// The timeline covers the WHOLE run in fixed memory: once it holds this many samples it
+	// merges adjacent pairs and halves its time resolution, forever. 900 samples x ~310 bytes
+	// is ~280 KB per species, so raise it freely if you want finer old history.
+	inline constexpr int32 TimelineMaxSamples = 900;
+	inline constexpr int32 ScatterMaxPoints = 260;   // individuals sampled per species for the scatter page
+	inline constexpr float ChartFillStridePx = 3.f;   // px step used to fill spread / stacked-area bands
+	inline constexpr float FlowRateWindowSec = 20.f;  // window for food-web energy-throughput rates
+
 	// --- Creature appearance (every individual's genome shapes how it looks) ---
 	// Colour = diet hue x vigour brightness; one instanced mesh per (hue, shade) bucket.
 	inline constexpr int32 NumDietHues = 10;

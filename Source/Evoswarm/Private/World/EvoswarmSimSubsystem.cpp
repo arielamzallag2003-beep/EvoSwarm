@@ -55,6 +55,56 @@ void UEvoswarmSimSubsystem::SetSpeciesInfo(int32 SpeciesIndex, const FString& Na
 	}
 	SpeciesStats[SpeciesIndex].Name = Name;
 	SpeciesStats[SpeciesIndex].Color = Color;
+	EnsureKillMatrixSize();
+}
+
+void UEvoswarmSimSubsystem::EnsureKillMatrixSize()
+{
+	// Square matrix, re-laid-out when the side length changes (only ever at setup, and species
+	// count is tiny, so the naive copy is fine).
+	const int32 N = SpeciesStats.Num();
+	const int32 Wanted = N * N;
+	if (KillMatrix.Num() == Wanted)
+	{
+		return;
+	}
+	const int32 OldN = FMath::FloorToInt(FMath::Sqrt(static_cast<float>(KillMatrix.Num())));
+	TArray<int32> Rebuilt;
+	Rebuilt.SetNumZeroed(Wanted);
+	for (int32 K = 0; K < OldN && K < N; ++K)
+	{
+		for (int32 V = 0; V < OldN && V < N; ++V)
+		{
+			Rebuilt[K * N + V] = KillMatrix[K * OldN + V];
+		}
+	}
+	KillMatrix = MoveTemp(Rebuilt);
+}
+
+int32 UEvoswarmSimSubsystem::GetKillCount(int32 Killer, int32 Victim) const
+{
+	const int32 N = SpeciesStats.Num();
+	const int32 Index = Killer * N + Victim;
+	return KillMatrix.IsValidIndex(Index) ? KillMatrix[Index] : 0;
+}
+
+void UEvoswarmSimSubsystem::NotifyPlantEaten(int32 SpeciesIndex, float EnergyGained)
+{
+	FoodCount = FMath::Max(0, FoodCount - 1);
+	if (SpeciesStats.IsValidIndex(SpeciesIndex))
+	{
+		FTrophicLedger& L = SpeciesStats[SpeciesIndex].Trophic;
+		L.PlantEnergy += EnergyGained;
+		++L.PlantsEaten;
+	}
+}
+
+void UEvoswarmSimSubsystem::NotifyMeatEaten(int32 SpeciesIndex, float EnergyGained)
+{
+	if (SpeciesStats.IsValidIndex(SpeciesIndex))
+	{
+		SpeciesStats[SpeciesIndex].Trophic.MeatEnergy += EnergyGained;
+	}
 }
 
 DEFINE_LOG_CATEGORY_STATIC(LogEvoswarmSim, Log, All);
@@ -236,6 +286,14 @@ void UEvoswarmSimSubsystem::SampleHistory()
 				History.RemoveAt(0);
 			}
 		};
+	auto PushF = [](TArray<float>& History, float Value)
+		{
+			History.Add(Value);
+			if (History.Num() > Evo::StatsHistorySamples)
+			{
+				History.RemoveAt(0);
+			}
+		};
 
 	for (FSpeciesLiveStats& S : SpeciesStats)
 	{
@@ -247,6 +305,70 @@ void UEvoswarmSimSubsystem::SampleHistory()
 		Push(S.DeathHistory, DeathsNow - S.LastSampledDeaths);
 		S.LastSampledBirths = S.TotalBirths;
 		S.LastSampledDeaths = DeathsNow;
+
+		// Energy throughput this interval (food-web arrow widths).
+		FTrophicLedger& L = S.Trophic;
+		PushF(L.PlantEnergyHistory, L.PlantEnergy - L.LastSampledPlantEnergy);
+		PushF(L.MeatEnergyHistory, L.MeatEnergy - L.LastSampledMeatEnergy);
+		L.LastSampledPlantEnergy = L.PlantEnergy;
+		L.LastSampledMeatEnergy = L.MeatEnergy;
+
+		// One point on the whole-run record. TraitNow was filled by the stats processor
+		// earlier this frame, so this is a straight copy - no second pass over the entities.
+		FSpeciesTimeSample Sample;
+		Sample.Time = ElapsedTime;
+		Sample.Count = static_cast<float>(S.Count);
+		Sample.BirthRate = Evo::RatePerMinute(S.BirthHistory);
+		Sample.DeathRate = Evo::RatePerMinute(S.DeathHistory);
+		Sample.AvgGeneration = S.AvgGeneration;
+		for (int32 I = 0; I < NumBoidStats; ++I)
+		{
+			Sample.Traits[I] = S.TraitNow[I];
+		}
+		S.Timeline.Push(Sample);
+	}
+}
+
+void UEvoswarmSimSubsystem::CycleAnalyticsPage(int32 Direction)
+{
+	const int32 Next = (static_cast<int32>(AnalyticsPage) + Direction + NumAnalyticsPages) % NumAnalyticsPages;
+	AnalyticsPage = static_cast<EAnalyticsPage>(Next);
+}
+
+void UEvoswarmSimSubsystem::CycleAnalyticsSelection(int32 Direction)
+{
+	// [ and ] mean "previous / next" in whatever the visible page is selecting.
+	if (AnalyticsPage == EAnalyticsPage::Scatter)
+	{
+		AnalyticsScatterIndex = (AnalyticsScatterIndex + Direction + Evo::NumScatterPresets) % Evo::NumScatterPresets;
+	}
+	else
+	{
+		AnalyticsTraitIndex = (AnalyticsTraitIndex + Direction + NumBoidStats) % NumBoidStats;
+	}
+}
+
+void UEvoswarmSimSubsystem::ExportAnalyticsCsv()
+{
+	TArray<Evo::FCsvSpeciesInput> Inputs;
+	Inputs.Reserve(SpeciesStats.Num());
+	for (const FSpeciesLiveStats& S : SpeciesStats)
+	{
+		Evo::FCsvSpeciesInput& In = Inputs.AddDefaulted_GetRef();
+		In.Name = S.Name;
+		In.Timeline = &S.Timeline;
+		In.Trophic = &S.Trophic;
+	}
+
+	FString Error;
+	const FString Dir = Evo::ExportRunToCsv(Inputs, KillMatrix, Error);
+	if (Dir.IsEmpty())
+	{
+		LogEvent(FString::Printf(TEXT("CSV export failed: %s"), *Error), FLinearColor(0.9f, 0.4f, 0.4f));
+	}
+	else
+	{
+		LogEvent(FString::Printf(TEXT("CSV exported to %s"), *Dir), FLinearColor(0.5f, 0.85f, 0.95f));
 	}
 }
 
@@ -263,6 +385,16 @@ void UEvoswarmSimSubsystem::NotifyKill(int32 KillerSpeciesIndex, int32 VictimSpe
 	if (SpeciesStats.IsValidIndex(KillerSpeciesIndex))
 	{
 		++SpeciesStats[KillerSpeciesIndex].TotalKillsMade;
+	}
+	if (SpeciesStats.IsValidIndex(VictimSpeciesIndex))
+	{
+		// Every kill drops a carcass, so this doubles as the carcass source count.
+		++SpeciesStats[VictimSpeciesIndex].Trophic.CarcassesDropped;
+	}
+	const int32 Index = KillerSpeciesIndex * SpeciesStats.Num() + VictimSpeciesIndex;
+	if (KillMatrix.IsValidIndex(Index))
+	{
+		++KillMatrix[Index];
 	}
 	NotifyDeath(VictimSpeciesIndex, EDeathCause::Predation);
 }

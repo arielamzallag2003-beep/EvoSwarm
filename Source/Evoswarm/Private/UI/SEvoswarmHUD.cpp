@@ -3,6 +3,7 @@
 #include "SEvoswarmHUD.h"
 #include "EvoswarmSimSubsystem.h"
 #include "EvoswarmTuning.h"
+#include "SEvoswarmAnalytics.h"
 
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
@@ -13,50 +14,10 @@
 #include "Widgets/Images/SImage.h"
 #include "Widgets/SLeafWidget.h"
 
-#include "Styling/CoreStyle.h"
-#include "Brushes/SlateColorBrush.h"
+#include "EvoswarmHUDStyle.h"
 #include "Rendering/DrawElements.h"
 
 #define LOCTEXT_NAMESPACE "Evoswarm"
-
-// ---------------------------------------------------------------------------------------------
-// Shared style helpers (code-only: no asset dependencies, no UMG).
-// ---------------------------------------------------------------------------------------------
-namespace
-{
-	const FSlateColorBrush GWhiteBrush(FLinearColor::White);
-
-	const FLinearColor CPanelBg(0.02f, 0.025f, 0.04f, 0.86f);
-	const FLinearColor CWhite(0.92f, 0.94f, 0.97f, 1.f);
-	const FLinearColor CGrey(0.65f, 0.68f, 0.72f, 1.f);
-	const FLinearColor CBarBg(0.12f, 0.13f, 0.16f, 1.f);
-	const FLinearColor CAccent(0.30f, 0.65f, 1.0f, 1.f);
-	const FLinearColor CGood(0.55f, 0.85f, 0.55f, 1.f);
-	const FLinearColor CBad(0.85f, 0.55f, 0.55f, 1.f);
-
-	FSlateFontInfo FontTitle() { return FCoreStyle::GetDefaultFontStyle("Bold", 15); }
-	FSlateFontInfo FontName() { return FCoreStyle::GetDefaultFontStyle("Bold", 11); }
-	FSlateFontInfo FontBody() { return FCoreStyle::GetDefaultFontStyle("Regular", 9); }
-	FSlateFontInfo FontSmall() { return FCoreStyle::GetDefaultFontStyle("Regular", 8); }
-
-	constexpr float PanelWidth = 500.f;
-	constexpr float InspectWidth = 310.f;
-
-	FText ClockText(float Seconds)
-	{
-		const int32 M = FMath::FloorToInt(Seconds / 60.f);
-		const int32 S = FMath::FloorToInt(Seconds) % 60;
-		return FText::FromString(FString::Printf(TEXT("%d:%02d"), M, S));
-	}
-
-	TSharedRef<SWidget> MakeRule(const FLinearColor& Color, float Height = 1.f)
-	{
-		return SNew(SBox).HeightOverride(Height)
-			[
-				SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(Color)
-			];
-	}
-}
 
 // ---------------------------------------------------------------------------------------------
 // SEvoswarmSparkline
@@ -85,7 +46,7 @@ public:
 		FSlateWindowElementList& Out, int32 LayerId, const FWidgetStyle& Style, bool bParentEnabled) const override
 	{
 		const FVector2D Size = FVector2D(Geometry.GetLocalSize());
-		FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(), &GWhiteBrush, ESlateDrawEffect::None, CBarBg);
+		FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(), &EvoHud::WhiteBrush, ESlateDrawEffect::None, EvoHud::BarBg);
 
 		const UEvoswarmSimSubsystem* S = Sim.Get();
 		if (S && S->GetSpeciesStats().IsValidIndex(SpeciesIndex))
@@ -201,14 +162,14 @@ public:
 					FSlateDrawElement::MakeBox(Out, LayerId + 1,
 						Geometry.ToPaintGeometry(FVector2f(FMath::Max(1.f, BinW - 2.f), H),
 							FSlateLayoutTransform(FVector2f(X, (float)Size.Y - H))),
-						&GWhiteBrush, ESlateDrawEffect::None, BarColor);
+						&EvoHud::WhiteBrush, ESlateDrawEffect::None, BarColor);
 				}
 			}
 
 			const float MarkerX = (float)Size.X * FMath::Clamp(St.AvgDiet, 0.f, 1.f);
 			FSlateDrawElement::MakeBox(Out, LayerId + 2,
 				Geometry.ToPaintGeometry(FVector2f(2.f, (float)Size.Y + 4.f), FSlateLayoutTransform(FVector2f(MarkerX - 1.f, -2.f))),
-				&GWhiteBrush, ESlateDrawEffect::None, CWhite);
+				&EvoHud::WhiteBrush, ESlateDrawEffect::None, EvoHud::White);
 		}
 		return LayerId + 2;
 	}
@@ -245,7 +206,7 @@ public:
 		const FVector2D Size = FVector2D(Geometry.GetLocalSize());
 
 		// Track background.
-		FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(), &GWhiteBrush, ESlateDrawEffect::None, CBarBg);
+		FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(), &EvoHud::WhiteBrush, ESlateDrawEffect::None, EvoHud::BarBg);
 
 		// Filled portion.
 		const float F = FMath::Clamp(FractionAttr.Get(), 0.f, 1.f);
@@ -253,18 +214,18 @@ public:
 		{
 			FSlateDrawElement::MakeBox(Out, LayerId + 1,
 				Geometry.ToPaintGeometry(FVector2f((float)Size.X * F, (float)Size.Y), FSlateLayoutTransform(FVector2f(0.f, 0.f))),
-				&GWhiteBrush, ESlateDrawEffect::None, BarColorAttr.Get());
+				&EvoHud::WhiteBrush, ESlateDrawEffect::None, BarColorAttr.Get());
 		}
 
 		// Label text overlay.
 		const FString Lbl = LabelAttr.Get();
 		if (!Lbl.IsEmpty())
 		{
-			const FSlateFontInfo Font = FontSmall();
+			const FSlateFontInfo Font = EvoHud::FontSmall();
 			FSlateDrawElement::MakeText(Out, LayerId + 2,
 				Geometry.ToPaintGeometry(FVector2f((float)Size.X - 6.f, (float)Size.Y),
 					FSlateLayoutTransform(FVector2f(4.f, 0.f))),
-				Lbl, Font, ESlateDrawEffect::None, CWhite);
+				Lbl, Font, ESlateDrawEffect::None, EvoHud::White);
 		}
 
 		return LayerId + 2;
@@ -298,12 +259,12 @@ public:
 
 		ChildSlot
 			[
-				SNew(SBox).WidthOverride(InspectWidth)
+				SNew(SBox).WidthOverride(EvoHud::InspectWidth)
 					.Visibility(this, &SEvoswarmInspector::ContentVisibility)
 					[
 						SNew(SBorder)
-							.BorderImage(&GWhiteBrush)
-							.BorderBackgroundColor(CPanelBg)
+							.BorderImage(&EvoHud::WhiteBrush)
+							.BorderBackgroundColor(EvoHud::PanelBg)
 							.Padding(FMargin(12.f, 10.f))
 							[
 								SNew(SVerticalBox)
@@ -313,7 +274,7 @@ public:
 									[
 										SNew(SBox).HeightOverride(3.f)
 											[
-												SAssignNew(AccentImage, SImage).Image(&GWhiteBrush).ColorAndOpacity(CAccent)
+												SAssignNew(AccentImage, SImage).Image(&EvoHud::WhiteBrush).ColorAndOpacity(EvoHud::Accent)
 											]
 									]
 
@@ -325,12 +286,12 @@ public:
 											[
 												SNew(SBox).WidthOverride(12.f).HeightOverride(12.f)
 													[
-														SAssignNew(SwatchImage, SImage).Image(&GWhiteBrush).ColorAndOpacity(CWhite)
+														SAssignNew(SwatchImage, SImage).Image(&EvoHud::WhiteBrush).ColorAndOpacity(EvoHud::White)
 													]
 											]
 											+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 											[
-												SNew(STextBlock).Font(FontName()).ColorAndOpacity(FSlateColor(CWhite))
+												SNew(STextBlock).Font(EvoHud::FontName()).ColorAndOpacity(FSlateColor(EvoHud::White))
 													.Text_Lambda([this] { return SpeciesText; })
 											]
 									]
@@ -338,11 +299,11 @@ public:
 								// Generation + age / lifespan.
 								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 									[
-										SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return GenAgeText; })
 									]
 
-									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
 
 									// HP bar.
 									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
@@ -378,50 +339,50 @@ public:
 											]
 									]
 
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
 
 									// Full genome (compact, 4 lines).
 									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 									[
-										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return GenomeLine1; })
 									]
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return GenomeLine2; })
 									]
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return GenomeLine3; })
 									]
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return GenomeLine4; })
 									]
 
-									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
 
 									// Live state (adrenaline, cooldowns, repro count).
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return StateLine1; })
 									]
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+										SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 											.Text_Lambda([this] { return StateLine2; })
 									]
 
-									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
 
 									// Status / instruction line.
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(STextBlock).Font(FontBody())
+										SNew(STextBlock).Font(EvoHud::FontBody())
 											.ColorAndOpacity_Lambda([this] { return StatusColor; })
 											.Text_Lambda([this] { return StatusText; })
 									]
@@ -460,7 +421,7 @@ public:
 
 		// --- Species identity ---
 		FString Name = TEXT("???");
-		FLinearColor Color = CWhite;
+		FLinearColor Color = EvoHud::White;
 		if (S->GetSpeciesStats().IsValidIndex(Ins.SpeciesIndex))
 		{
 			const FSpeciesLiveStats& Sp = S->GetSpeciesStats()[Ins.SpeciesIndex];
@@ -527,7 +488,7 @@ public:
 		else
 		{
 			StatusText = LOCTEXT("StatusHover", "F to lock on this creature");
-			StatusColor = FSlateColor(CGrey);
+			StatusColor = FSlateColor(EvoHud::Grey);
 		}
 	}
 
@@ -555,7 +516,7 @@ private:
 	FText GenomeLine1, GenomeLine2, GenomeLine3, GenomeLine4;
 	FText StateLine1, StateLine2;
 	FText StatusText;
-	FSlateColor StatusColor = FSlateColor(CGrey);
+	FSlateColor StatusColor = FSlateColor(EvoHud::Grey);
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -596,21 +557,21 @@ public:
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
 							[
 								SNew(SBox).WidthOverride(12.f).HeightOverride(12.f)
-									[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(SpeciesColor)]
+									[SNew(SImage).Image(&EvoHud::WhiteBrush).ColorAndOpacity(SpeciesColor)]
 							]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							[
-								SNew(STextBlock).Font(FontName()).ColorAndOpacity(FSlateColor(SpeciesColor))
+								SNew(STextBlock).Font(EvoHud::FontName()).ColorAndOpacity(FSlateColor(SpeciesColor))
 									.Text_Lambda([this] { return NameText; })
 							]
 							+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(10.f, 0.f, 0.f, 0.f)
 							[
-								SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+								SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 									.Text_Lambda([this] { return GenText; })
 							]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							[
-								SNew(STextBlock).Font(FontName()).ColorAndOpacity(FSlateColor(CWhite))
+								SNew(STextBlock).Font(EvoHud::FontName()).ColorAndOpacity(FSlateColor(EvoHud::White))
 									.Text_Lambda([this] { return CountText; })
 							]
 					]
@@ -632,12 +593,12 @@ public:
 
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 0.f)
 					[
-						SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
+						SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 							.Text_Lambda([this] { return GenomeLine1; })
 					]
 					+ SVerticalBox::Slot().AutoHeight()
 					[
-						SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
+						SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 							.Text_Lambda([this] { return GenomeLine2; })
 					]
 
@@ -646,28 +607,28 @@ public:
 						SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth()
 							[
-								SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGood))
+								SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::Good))
 									.Text_Lambda([this] { return BirthsText; })
 							]
 							+ SHorizontalBox::Slot().AutoWidth().Padding(14.f, 0.f, 0.f, 0.f)
 							[
-								SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CBad))
+								SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::Bad))
 									.Text_Lambda([this] { return DeathsText; })
 							]
 							+ SHorizontalBox::Slot().AutoWidth().Padding(14.f, 0.f, 0.f, 0.f)
 							[
-								SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CWhite))
+								SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::White))
 									.Text_Lambda([this] { return KillsText; })
 							]
 					]
 				+ SVerticalBox::Slot().AutoHeight()
 					[
-						SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+						SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 							.Text_Lambda([this] { return DeathCausesText; })
 					]
 
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)
-					[MakeRule(FLinearColor(1.f, 1.f, 1.f, 0.06f))]
+					[EvoHud::MakeRule(FLinearColor(1.f, 1.f, 1.f, 0.06f))]
 			];
 	}
 
@@ -735,39 +696,39 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+			SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 				.Text(LOCTEXT("LegendDiet", "DIET  herbivore \x2192 omnivore \x2192 carnivore"))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 		[SNew(SBox).HeightOverride(8.f)[SNew(SEvoswarmGradientStrip)]]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
 		[
-			SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+			SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 				.Text(LOCTEXT("LegendColor", "brightness = vigour (HP + armour + damage)"))
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+			SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 				.Text(LOCTEXT("LegendShape", "silhouette  bulk: HP \x00b7 length: run speed \x00b7 width: armour"))
 		];
 
 	// Left ecosystem panel.
 	TSharedRef<SWidget> LeftPanel =
-		SNew(SBox).WidthOverride(PanelWidth)
+		SNew(SBox).WidthOverride(EvoHud::PanelWidth)
 		[
 			SNew(SBorder)
-				.BorderImage(&GWhiteBrush)
-				.BorderBackgroundColor(CPanelBg)
+				.BorderImage(&EvoHud::WhiteBrush)
+				.BorderBackgroundColor(EvoHud::PanelBg)
 				.Padding(FMargin(14.f, 12.f))
 				[
 					SNew(SVerticalBox)
 
 						+ SVerticalBox::Slot().AutoHeight()
-						[SNew(SBox).HeightOverride(3.f)[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(CAccent)]]
+						[SNew(SBox).HeightOverride(3.f)[SNew(SImage).Image(&EvoHud::WhiteBrush).ColorAndOpacity(EvoHud::Accent)]]
 
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 						[
-							SNew(STextBlock).Font(FontTitle()).ColorAndOpacity(FSlateColor(CWhite))
+							SNew(STextBlock).Font(EvoHud::FontTitle()).ColorAndOpacity(FSlateColor(EvoHud::White))
 								.Text(LOCTEXT("Title", "EVOSWARM"))
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
@@ -775,33 +736,40 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 							SNew(SHorizontalBox)
 								+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 								[
-									SNew(STextBlock).Font(FontBody()).ColorAndOpacity(FSlateColor(CGrey))
+									SNew(STextBlock).Font(EvoHud::FontBody()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 										.Text_Lambda([this] { return SummaryText; })
 								]
 								+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 								[
-									SNew(STextBlock).Font(FontBody())
+									SNew(STextBlock).Font(EvoHud::FontBody())
 										.ColorAndOpacity_Lambda([this] { return FpsColor; })
 										.Text_Lambda([this] { return FpsText; })
 								]
 						]
 
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
 						+ SVerticalBox::Slot().AutoHeight()[Legend]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)[MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
 
 						+ SVerticalBox::Slot().AutoHeight()
 						[SAssignNew(SpeciesContainer, SVerticalBox)]
 
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 4.f)
 						[
-							SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
+							SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
 								.Text(LOCTEXT("Events", "EVENTS"))
 						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
 							SNew(SBox).HeightOverride(120.f)
 								[SAssignNew(EventScroll, SScrollBox)]
+						]
+
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)[EvoHud::MakeRule(FLinearColor(1, 1, 1, 0.08f))]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+						[
+							SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Dim))
+								.Text(LOCTEXT("HintAnalytics", "G  analytics dashboard      B  debug overlay      F  inspect"))
 						]
 				]
 		];
@@ -833,7 +801,15 @@ void SEvoswarmHUD::Construct(const FArguments& InArgs)
 				.VAlign(VAlign_Center)
 				[
 					SNew(SBox).WidthOverride(6.f).HeightOverride(6.f)
-						[SNew(SImage).Image(&GWhiteBrush).ColorAndOpacity(FLinearColor(1.f, 1.f, 1.f, 0.35f))]
+						[SNew(SImage).Image(&EvoHud::WhiteBrush).ColorAndOpacity(FLinearColor(1.f, 1.f, 1.f, 0.35f))]
+				]
+
+				// Analytics dashboard (G). Last slot, so when it opens it covers everything above.
+				+ SOverlay::Slot()
+				.HAlign(HAlign_Fill)
+				.VAlign(VAlign_Fill)
+				[
+					SNew(SEvoswarmAnalytics).Sim(Sim)
 				]
 		];
 }
@@ -887,7 +863,7 @@ void SEvoswarmHUD::RefreshGlobalBar(float DeltaTime)
 	}
 
 	SummaryText = FText::FromString(FString::Printf(TEXT("Boids %d    Food %d    Gen %d    %s"),
-		TotalPop, FoodCount, PeakGen, *ClockText(Elapsed).ToString()));
+		TotalPop, FoodCount, PeakGen, *EvoHud::ClockText(Elapsed).ToString()));
 
 	FpsText = FText::FromString(FString::Printf(TEXT("%.0f FPS"), SmoothedFps));
 	FpsColor = FSlateColor((SmoothedFps >= 50.f) ? FLinearColor(0.45f, 0.9f, 0.5f, 1.f)
@@ -912,12 +888,12 @@ void SEvoswarmHUD::RefreshEventFeed()
 				SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
 					[
-						SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(CGrey))
-							.Text(ClockText(E.Time))
+						SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(EvoHud::Grey))
+							.Text(EvoHud::ClockText(E.Time))
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.f)
 					[
-						SNew(STextBlock).Font(FontSmall()).ColorAndOpacity(FSlateColor(E.Color))
+						SNew(STextBlock).Font(EvoHud::FontSmall()).ColorAndOpacity(FSlateColor(E.Color))
 							.AutoWrapText(true)
 							.Text(FText::FromString(E.Text))
 					]
