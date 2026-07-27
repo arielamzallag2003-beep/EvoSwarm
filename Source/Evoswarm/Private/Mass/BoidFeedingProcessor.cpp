@@ -63,11 +63,12 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 					FGridFood Food;
 					if (Grid->FindNearestFood(Pos, Evo::EatReach, EFoodType::Plant, Food) && Grid->TryClaim(Food.Entity))
 					{
-						S.CurrentHunger = FMath::Min(MaxHunger, S.CurrentHunger + Food.Energy * Evo::PlantDigestion(G));
+						const float PlantGain = Food.Energy * Evo::PlantDigestion(G);
+						S.CurrentHunger = FMath::Min(MaxHunger, S.CurrentHunger + PlantGain);
 						Context.Defer().DestroyEntity(Food.Entity);
 						if (Sim)
 						{
-							Sim->NotifyFoodConsumed();
+							Sim->NotifyPlantEaten(Species.SpeciesIndex, PlantGain);
 						}
 					}
 				}
@@ -81,8 +82,13 @@ void UBoidFeedingProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 						if (FFoodFragment* CarcFrag = EntityManager.GetFragmentDataPtr<FFoodFragment>(Carcass.Entity))
 						{
 							const float Bite = FMath::Min(Evo::CarcassBite, CarcFrag->Energy);
-							S.CurrentHunger = FMath::Min(MaxHunger, S.CurrentHunger + Bite * Evo::MeatDigestion(G));
+							const float MeatGain = Bite * Evo::MeatDigestion(G);
+							S.CurrentHunger = FMath::Min(MaxHunger, S.CurrentHunger + MeatGain);
 							CarcFrag->Energy -= Bite;
+							if (Sim)
+							{
+								Sim->NotifyMeatEaten(Species.SpeciesIndex, MeatGain);
+							}
 							if (CarcFrag->Energy <= 0.f)
 							{
 								Context.Defer().DestroyEntity(Carcass.Entity);

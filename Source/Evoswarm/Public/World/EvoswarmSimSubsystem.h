@@ -14,6 +14,7 @@
 #include "BoidFragments.h"
 #include "BoidStats.h"
 #include "EvoswarmTuning.h" // NumDietHues, StatsSampleInterval, ... (all inline constexpr)
+#include "EvoswarmAnalytics.h" // whole-run timelines, trophic ledger, analytics pages
 #include "EvoswarmSimSubsystem.generated.h"
 
 class UInstancedStaticMeshComponent;
@@ -95,6 +96,28 @@ struct FSpeciesLiveStats
 	float AvgMutationRate = 0.f;
 	float AvgGeneration = 0.f;
 	int32 MaxGeneration = 0;
+
+	/**
+	 * Every stat's full live distribution (mean / sd / min / max), refreshed each frame by the
+	 * stats processor. The Avg* fields above are just TraitNow[..].Mean, kept because the
+	 * existing panel rows read them by name. The spread is the point: a mean alone cannot tell
+	 * a uniform population from one that has split into two strategies.
+	 */
+	FTraitDistribution TraitNow[NumBoidStats];
+
+	/**
+	 * A subsample of live genomes (stride-picked, up to Evo::ScatterMaxPoints) so the scatter
+	 * page can plot individuals rather than averages. Whole genomes, not one chosen pair, so
+	 * switching axes at runtime costs nothing on the sim side.
+	 */
+	TArray<FBoidGenome> GenomeSamples;
+
+	/** Whole-run history: mean and spread of every stat, decimated to stay memory-bounded. */
+	FSpeciesTimeline Timeline;
+
+	/** Who this species ate, and how much energy it actually got out of it. */
+	FTrophicLedger Trophic;
+
 	/** Recent population samples (ring buffer) for the HUD sparkline; oldest first. */
 	TArray<int32> PopHistory;
 
@@ -181,6 +204,14 @@ public:
 	TArray<FSpeciesLiveStats>& GetSpeciesStatsMutable() { return SpeciesStats; }
 	int32 GetFoodCount() const { return FoodCount; }
 
+	/** Live food census from the stats processor (display only; regrowth still uses FoodCount). */
+	void SetFoodCensus(int32 Plants, int32 Carcasses) { LivePlantCount = Plants; LiveCarcassCount = Carcasses; }
+	int32 GetLivePlantCount() const { return LivePlantCount; }
+	int32 GetLiveCarcassCount() const { return LiveCarcassCount; }
+
+	/** Kills by Killer on Victim since sim start. Drives the food-web page's arrows. */
+	int32 GetKillCount(int32 Killer, int32 Victim) const;
+
 	/** Current population of a species (from the stats processor; ~1 frame stale). */
 	int32 GetSpeciesCount(int32 SpeciesIndex) const { return SpeciesStats.IsValidIndex(SpeciesIndex) ? SpeciesStats[SpeciesIndex].Count : 0; }
 
@@ -195,6 +226,23 @@ public:
 	void SetDebugMode(int32 NewMode);
 	int32 GetDebugMode() const { return CurrentDebugMode; }
 
+	// --- Analytics dashboard (G opens it, Tab pages, [ ] cycle the selection, K exports CSV) ---
+	// Same shape as the debug-overlay state above: the pawn writes, the Slate panel reads.
+	void ToggleAnalytics() { bAnalyticsOpen = !bAnalyticsOpen; }
+	bool IsAnalyticsOpen() const { return bAnalyticsOpen; }
+
+	/** Next / previous page (wraps). */
+	void CycleAnalyticsPage(int32 Direction);
+	EAnalyticsPage GetAnalyticsPage() const { return AnalyticsPage; }
+
+	/** Cycles whatever the current page selects: the charted trait, or the scatter axis pair. */
+	void CycleAnalyticsSelection(int32 Direction);
+	EBoidStat GetAnalyticsTrait() const { return static_cast<EBoidStat>(AnalyticsTraitIndex); }
+	const FScatterPreset& GetAnalyticsScatterPreset() const { return Evo::ScatterPresets[AnalyticsScatterIndex]; }
+
+	/** Dumps the recorded run to Saved/Evoswarm/ and reports the outcome in the event feed. */
+	void ExportAnalyticsCsv();
+
 	// --- Spawning (safe: invoked outside Mass processing) ---
 	FMassEntityHandle SpawnBoid(const FBoidSpeciesSharedFragment& Shared, const FBoidGenome& Genome, const FVector& Position, int32 Generation = 0);
 	FMassEntityHandle SpawnFood(const FVector& Position, EFoodType Type = EFoodType::Plant, float Energy = -1.f);
@@ -202,7 +250,14 @@ public:
 	// --- Called from processors during the frame (counter / queue only, no structural change) ---
 	void RequestBirth(const FBoidSpeciesSharedFragment& Shared, const FBoidGenome& Genome, const FVector& Position, int32 ChildGeneration);
 	void RequestCarcass(const FVector& Position, float Energy);
-	void NotifyFoodConsumed() { FoodCount = FMath::Max(0, FoodCount - 1); }
+	/**
+	 * A plant was grazed. Energy is post-digestion (what the eater actually gained), so the
+	 * food-web arrows reflect nutrition rather than bite count.
+	 */
+	void NotifyPlantEaten(int32 SpeciesIndex, float EnergyGained);
+
+	/** A bite was taken out of a carcass. Energy is post-digestion, as above. */
+	void NotifyMeatEaten(int32 SpeciesIndex, float EnergyGained);
 
 	// --- Ecosystem event counters (all boid processors run on the game thread, so plain ints) ---
 	/** Record a non-predation death (starvation / old age / combat wounds). */
@@ -264,9 +319,20 @@ private:
 
 	FRandomStream Rng = FRandomStream(1337);
 	int32 FoodCount = 0;
+	int32 LivePlantCount = 0;
+	int32 LiveCarcassCount = 0;
 	bool bRunning = false;
 	bool bDebugDraw = false;
 	int32 CurrentDebugMode = 0;
+
+	/** Row-major [Killer * NumSpecies + Victim]; grown lazily as species register. */
+	TArray<int32> KillMatrix;
+	void EnsureKillMatrixSize();
+
+	bool bAnalyticsOpen = false;
+	EAnalyticsPage AnalyticsPage = EAnalyticsPage::TraitCurves;
+	int32 AnalyticsTraitIndex = static_cast<int32>(EBoidStat::Diet); // diet drift is the best opener
+	int32 AnalyticsScatterIndex = 0;
 
 	float ElapsedTime = 0.f;       // seconds since the sim started
 	float HistoryTimer = 0.f;      // accumulator for population sampling

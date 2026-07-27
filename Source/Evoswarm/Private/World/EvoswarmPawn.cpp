@@ -81,13 +81,72 @@ void AEvoswarmPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 	if (PlayerInputComponent)
 	{
 		PlayerInputComponent->BindAction(TEXT("ToggleDebug"), IE_Pressed, this, &AEvoswarmPawn::ToggleDebug);
-		
+
 		PlayerInputComponent->BindKey(EKeys::NumPadZero, IE_Pressed, this, &AEvoswarmPawn::SetDebugMode0);
 		PlayerInputComponent->BindKey(EKeys::NumPadOne, IE_Pressed, this, &AEvoswarmPawn::SetDebugMode1);
 		PlayerInputComponent->BindKey(EKeys::NumPadTwo, IE_Pressed, this, &AEvoswarmPawn::SetDebugMode2);
 		PlayerInputComponent->BindKey(EKeys::NumPadThree, IE_Pressed, this, &AEvoswarmPawn::SetDebugMode3);
 		PlayerInputComponent->BindKey(EKeys::NumPadFour, IE_Pressed, this, &AEvoswarmPawn::SetDebugMode4);
 		PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AEvoswarmPawn::ToggleSelect);
+
+		// Analytics dashboard.
+		PlayerInputComponent->BindKey(EKeys::G, IE_Pressed, this, &AEvoswarmPawn::ToggleAnalytics);
+		PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this, &AEvoswarmPawn::NextAnalyticsPage);
+		PlayerInputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &AEvoswarmPawn::PrevAnalyticsSelection);
+		PlayerInputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &AEvoswarmPawn::NextAnalyticsSelection);
+		PlayerInputComponent->BindKey(EKeys::K, IE_Pressed, this, &AEvoswarmPawn::ExportAnalyticsCsv);
+	}
+}
+
+UEvoswarmSimSubsystem* AEvoswarmPawn::GetSim() const
+{
+	UWorld* World = GetWorld();
+	return World ? World->GetSubsystem<UEvoswarmSimSubsystem>() : nullptr;
+}
+
+void AEvoswarmPawn::ToggleAnalytics()
+{
+	if (UEvoswarmSimSubsystem* Sim = GetSim())
+	{
+		Sim->ToggleAnalytics();
+	}
+}
+
+void AEvoswarmPawn::NextAnalyticsPage()
+{
+	// Paging while the dashboard is closed would be invisible and confusing, so Tab opens it.
+	if (UEvoswarmSimSubsystem* Sim = GetSim())
+	{
+		if (!Sim->IsAnalyticsOpen())
+		{
+			Sim->ToggleAnalytics();
+			return;
+		}
+		Sim->CycleAnalyticsPage(1);
+	}
+}
+
+void AEvoswarmPawn::PrevAnalyticsSelection()
+{
+	if (UEvoswarmSimSubsystem* Sim = GetSim())
+	{
+		Sim->CycleAnalyticsSelection(-1);
+	}
+}
+
+void AEvoswarmPawn::NextAnalyticsSelection()
+{
+	if (UEvoswarmSimSubsystem* Sim = GetSim())
+	{
+		Sim->CycleAnalyticsSelection(1);
+	}
+}
+
+void AEvoswarmPawn::ExportAnalyticsCsv()
+{
+	if (UEvoswarmSimSubsystem* Sim = GetSim())
+	{
+		Sim->ExportAnalyticsCsv();
 	}
 }
 
