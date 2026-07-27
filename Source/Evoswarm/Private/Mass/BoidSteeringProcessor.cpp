@@ -86,6 +86,7 @@ void UBoidSteeringProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
 			FVector NearestPrey = FVector::ZeroVector;
 			float BestPreyDistSq = TNumericLimits<float>::Max();
 			bool bHasPrey = false;
+			S.bDebugHasPrey = false; 
 
 			const bool bCanHunt = Evo::CanHunt(G);
 
