@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>FlockForge.Core</AssemblyName>
+    <RootNamespace>PalaceOfFantasy.FlockForge.Core</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <OutputPath>../../Build~/bin/$(Configuration)/</OutputPath>
+    <BaseIntermediateOutputPath>../../Build~/obj/</BaseIntermediateOutputPath>
+    <NoWarn>1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Default compile items are enabled by default in .NET SDK -->
+  </ItemGroup>
+
+</Project>

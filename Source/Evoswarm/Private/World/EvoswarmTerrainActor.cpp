@@ -1,0 +1,367 @@
+// Copyright Evoswarm.
+
+#include "EvoswarmTerrainActor.h"
+#include "EvoswarmTerrain.h"
+#include "EvoswarmTuning.h"
+#include "ProceduralMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
+
+namespace
+{
+	/**
+	 * Continuous surface colour at a world XY. Instead of snapping each quad to one biome
+	 * (which made borders read as blocky patches), the same moisture/ruggedness fields that
+	 * classify the biome are used to cross-fade the palettes over soft bands around the
+	 * thresholds in Evo::BiomeAt — so gameplay biomes are unchanged, but their borders melt
+	 * into each other organically. Shoreline sand, cliff rock and snow blend the same way,
+	 * and a large-scale noise tint keeps wide plains from reading as flat paint.
+	 */
+	FLinearColor BlendedSurfaceColor(float X, float Y)
+	{
+		const float H = Evo::TerrainHeight(X, Y);
+		const float R = Evo::Ruggedness(X, Y);
+		const float M = Evo::Moisture(X, Y);
+
+		const FLinearColor DesertC = Evo::GetBiomeParams(EBiome::Desert).Color;
+		const FLinearColor GrassC  = Evo::GetBiomeParams(EBiome::Grassland).Color;
+		const FLinearColor ForestC = Evo::GetBiomeParams(EBiome::Forest).Color;
+		const FLinearColor RockC   = Evo::GetBiomeParams(EBiome::Highlands).Color;
+		const FLinearColor SnowC(0.90f, 0.93f, 0.97f);
+		const FLinearColor SandC(0.80f, 0.72f, 0.52f);
+		const FLinearColor CliffC(0.30f, 0.27f, 0.25f);
+
+		// Lowlands: desert -> grassland -> forest along moisture (bands around 0.32 / 0.55).
+		FLinearColor Col = FMath::Lerp(DesertC, GrassC, FMath::SmoothStep(0.26f, 0.38f, M));
+		Col = FMath::Lerp(Col, ForestC, FMath::SmoothStep(0.49f, 0.61f, M));
+
+		// Highlands fade in with ruggedness (band around 0.60); peaks fade to snow with height.
+		const FLinearColor High = FMath::Lerp(RockC, SnowC, FMath::SmoothStep(Evo::SnowLine - 140.f, Evo::SnowLine + 140.f, H));
+		Col = FMath::Lerp(Col, High, FMath::SmoothStep(0.55f, 0.65f, R));
+
+		// Steep faces show bare rock whatever the biome.
+		const float NZ = Evo::TerrainNormal(X, Y).Z;
+		Col = FMath::Lerp(CliffC, Col, FMath::SmoothStep(Evo::CliffNormalZ - 0.06f, Evo::CliffNormalZ + 0.06f, NZ));
+
+		// Shoreline sand band just above (and under) the waterline.
+		Col = FMath::Lerp(SandC, Col, FMath::SmoothStep(Evo::SeaLevel + Evo::BeachBand * 0.6f, Evo::SeaLevel + Evo::BeachBand * 1.7f, H));
+
+		// Subtle large-scale brightness variation for a livelier ground read.
+		const float Var = Evo::Fbm01(X, Y, 1.f / 3500.f, 2, 9.7f);
+		return Col * (0.90f + 0.20f * Var);
+	}
+}
+
+AEvoswarmTerrain::AEvoswarmTerrain()
+{
+	PrimaryActorTick.bCanEverTick = false;
+	Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("TerrainMesh"));
+	RootComponent = Mesh;
+	Mesh->SetMobility(EComponentMobility::Movable);
+	Mesh->bUseAsyncCooking = true;
+	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision); // boids follow height analytically
+}
+
+void AEvoswarmTerrain::Build(float HalfExtent, int32 CellsPerSide)
+{
+	if (!Mesh || CellsPerSide < 1)
+	{
+		return;
+	}
+
+	const float Cell = (HalfExtent * 2.f) / static_cast<float>(CellsPerSide);
+	const float UVScale = 1.f / 1000.f;
+	UMaterialInterface* BaseMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+
+	// One shared vertex grid, one mesh section: the surface colour is painted per VERTEX
+	// (smoothly blended across biome borders) instead of per quad, so borders are organic
+	// gradients rather than blocky patches. The vertex grid is shared between quads, which
+	// also makes the mesh ~4x lighter than the old per-quad-duplicated layout.
+	const int32 VertsPerSide = CellsPerSide + 1;
+	TArray<FVector> Verts;
+	TArray<int32> Tris;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UVs;
+	TArray<FLinearColor> Colors;
+	TArray<FProcMeshTangent> Tangents;
+	Verts.Reserve(VertsPerSide * VertsPerSide);
+	Tris.Reserve(CellsPerSide * CellsPerSide * 6);
+
+	for (int32 IY = 0; IY < VertsPerSide; ++IY)
+	{
+		for (int32 IX = 0; IX < VertsPerSide; ++IX)
+		{
+			const float VX = -HalfExtent + IX * Cell;
+			const float VY = -HalfExtent + IY * Cell;
+			Verts.Add(FVector(VX, VY, Evo::TerrainHeight(VX, VY)));
+			Normals.Add(Evo::TerrainNormal(VX, VY));
+			UVs.Add(FVector2D(VX * UVScale, VY * UVScale));
+			Colors.Add(BlendedSurfaceColor(VX, VY));
+			Tangents.Add(FProcMeshTangent(1.f, 0.f, 0.f));
+		}
+	}
+	for (int32 IY = 0; IY < CellsPerSide; ++IY)
+	{
+		for (int32 IX = 0; IX < CellsPerSide; ++IX)
+		{
+			const int32 Base = IY * VertsPerSide + IX;
+			Tris.Add(Base); Tris.Add(Base + VertsPerSide); Tris.Add(Base + 1);
+			Tris.Add(Base + 1); Tris.Add(Base + VertsPerSide); Tris.Add(Base + VertsPerSide + 1);
+		}
+	}
+
+	Mesh->CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs, Colors, Tangents, /*bCreateCollision=*/false);
+
+	// M_Terrain (generated by Tools/Houdini/make_terrain_mat.py) simply routes vertex colour
+	// to base colour. Fall back to the flat engine material if it's missing so the world
+	// still builds — just without the painted biomes.
+	if (UMaterialInterface* TerrainMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/EvoGen/M_Terrain.M_Terrain")))
+	{
+		Mesh->SetMaterial(0, TerrainMat);
+	}
+	else if (BaseMat)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("M_Terrain missing (run Tools/Houdini/make_terrain_mat.py); terrain will be untinted."));
+		UMaterialInstanceDynamic* Dyn = UMaterialInstanceDynamic::Create(BaseMat, this);
+		Dyn->SetVectorParameterValue(TEXT("Color"), Evo::GetBiomeParams(EBiome::Grassland).Color);
+		Mesh->SetMaterial(0, Dyn);
+	}
+
+	BuildWater(HalfExtent, BaseMat);
+	ScatterFlora(HalfExtent);
+}
+
+void AEvoswarmTerrain::BuildWater(float HalfExtent, UMaterialInterface* BaseMat)
+{
+	// A low-poly faceted water plane at sea level; basins below it read as lakes and sea.
+	UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/EvoGen/Evo_Water.Evo_Water"));
+	if (!Plane)
+	{
+		Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+	}
+	if (!Plane)
+	{
+		return;
+	}
+
+	UStaticMeshComponent* Water = NewObject<UStaticMeshComponent>(this);
+	Water->SetupAttachment(RootComponent);
+	Water->RegisterComponent();
+	Water->SetMobility(EComponentMobility::Movable);
+	Water->SetStaticMesh(Plane);
+	Water->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Water->SetCanEverAffectNavigation(false);
+	// Un plan translucide de 100 km de côté n'a rien à projeter : le sortir des cascades
+	// d'ombre et du champ de distance de Lumen ne change rien à l'image et économise
+	// un rendu complet de la nappe par cascade.
+	Water->SetCastShadow(false);
+	Water->bAffectDistanceFieldLighting = false;
+
+	// Evo_Water is ~2 m across and imports Y-up; stand it flat and scale it over the whole arena.
+	const float Scale = (HalfExtent * 2.f * 1.04f) / 200.f;
+	Water->SetWorldRotation(Evo::MeshStandUp());
+	Water->SetWorldScale3D(FVector(Scale));
+	Water->SetWorldLocation(FVector(0.f, 0.f, Evo::SeaLevel));
+
+	// Prefer the translucent, glossy water material; fall back to a flat blue tint if it's missing.
+	if (UMaterialInterface* WaterMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/EvoGen/M_Water.M_Water")))
+	{
+		Water->SetMaterial(0, WaterMat);
+	}
+	else if (BaseMat)
+	{
+		UMaterialInstanceDynamic* Tint = UMaterialInstanceDynamic::Create(BaseMat, this);
+		Tint->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.09f, 0.32f, 0.46f));
+		Water->SetMaterial(0, Tint);
+	}
+	AddInstanceComponent(Water);
+}
+
+void AEvoswarmTerrain::ScatterFlora(float HalfExtent)
+{
+	UMaterialInterface* BaseMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+
+	auto Load = [](const TCHAR* Path) { return LoadObject<UStaticMesh>(nullptr, Path); };
+	UStaticMesh* PineA   = Load(TEXT("/Game/EvoGen/Evo_Pine_A.Evo_Pine_A"));
+	UStaticMesh* PineB   = Load(TEXT("/Game/EvoGen/Evo_Pine_B.Evo_Pine_B"));
+	UStaticMesh* RockA   = Load(TEXT("/Game/EvoGen/Evo_Rock_A.Evo_Rock_A"));
+	UStaticMesh* RockB   = Load(TEXT("/Game/EvoGen/Evo_Rock_B.Evo_Rock_B"));
+	UStaticMesh* RockBig = Load(TEXT("/Game/EvoGen/Evo_RockBig.Evo_RockBig"));
+	UStaticMesh* BushM   = Load(TEXT("/Game/EvoGen/Evo_Bush.Evo_Bush"));
+	UStaticMesh* CactusM = Load(TEXT("/Game/EvoGen/Evo_Cactus.Evo_Cactus"));
+	UStaticMesh* FlowerM = Load(TEXT("/Game/EvoGen/Evo_Flower.Evo_Flower"));
+
+	// --- Le « bake » du décor -------------------------------------------------------------
+	// Trois choses distinguent ce scatter de l'ancien, à rendu identique :
+	//   1. HISM au lieu d'ISM : l'arbre hiérarchique permet un culling par INSTANCE (frustum
+	//      + occlusion) et le passage automatique aux LOD du mesh. En ISM simple, les dizaines
+	//      de milliers d'instances partaient toutes au GPU à chaque passe, y compris dans
+	//      chaque cascade d'ombre.
+	//   2. Une distance de coupe par famille : une fleur de 40 cm ne pèse plus rien à l'écran
+	//      à 200 m, un pin de 20 m reste visible jusqu'à l'horizon. La silhouette du paysage
+	//      est portée par les arbres et les gros rochers, donc elle ne change pas.
+	//   3. Un budget d'ombre et de champ de distance ciblé : seuls les volumes qui projettent
+	//      une ombre lisible la projettent. Le sous-bois n'entre plus dans les 3 cascades.
+	struct FPropSpec
+	{
+		UStaticMesh* Mesh = nullptr;
+		FLinearColor Color = FLinearColor::White;
+		float CullStart = 30000.f;   // début du fondu de disparition
+		float CullEnd = 42000.f;     // disparition complète
+		bool bShadow = true;         // entre dans les cascades d'ombre dynamiques
+		bool bDistanceField = false; // participe à l'éclairage indirect Lumen
+	};
+
+	// -EvoFloraMode=<0|1|2> choisit la stratégie de décor. Le même binaire peut donc jouer les
+	// trois, ce qui permet un A/B honnête : cache de shaders, version et population identiques,
+	// seul le mode change.
+	//   0 = d'origine   : ISM simple, aucune distance de coupe, ombre + Lumen pour tout
+	//   1 = réglé       : ISM simple, distances de coupe et politique d'ombre par famille
+	//   2 = hiérarchique: idem + HISM (culling par instance)
+	//
+	// MESURÉ sur ce projet (même binaire, populations appariées, moyenne sur ~35 s de sim) :
+	//   mode 0 : 15,25 ms      mode 2 : 16,39 ms      mode 1 : 16,85 ms
+	// Autrement dit les deux « optimisations » coûtent plus qu'elles ne rapportent. Le décor
+	// est peint avec un matériau trivial et n'était tout simplement pas le goulot : évaluer une
+	// distance de coupe par instance, et a fortiori maintenir un arbre hiérarchique, se paie en
+	// CPU à chaque frame pour un travail GPU qui était déjà négligeable.
+	// Le défaut reste donc 0. Les modes 1 et 2 sont conservés pour pouvoir refaire la mesure
+	// sur une autre machine — le verdict peut s'inverser sur un GPU plus faible.
+	int32 FloraMode = 0;
+	FParse::Value(FCommandLine::Get(), TEXT("EvoFloraMode="), FloraMode);
+	const bool bTuned = (FloraMode >= 1);   // distances de coupe + politique d'ombre
+	const bool bHier = (FloraMode >= 2);    // arbre hiérarchique
+
+	auto MakeProp = [this, BaseMat, bTuned, bHier](const FPropSpec& InSpec) -> UInstancedStaticMeshComponent*
+	{
+		FPropSpec Spec = InSpec;
+		if (!bTuned)
+		{
+			Spec.CullStart = 0.f; // 0 = aucune coupe, comportement d'origine
+			Spec.CullEnd = 0.f;
+			Spec.bShadow = true;
+			Spec.bDistanceField = true;
+		}
+
+		UInstancedStaticMeshComponent* ISM = bHier
+			? NewObject<UHierarchicalInstancedStaticMeshComponent>(this)
+			: NewObject<UInstancedStaticMeshComponent>(this);
+		ISM->SetupAttachment(RootComponent);
+		ISM->RegisterComponent();
+		ISM->SetMobility(EComponentMobility::Static);
+		ISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ISM->SetCanEverAffectNavigation(false);
+		if (Spec.Mesh)
+		{
+			ISM->SetStaticMesh(Spec.Mesh);
+		}
+		if (BaseMat)
+		{
+			UMaterialInstanceDynamic* Dyn = UMaterialInstanceDynamic::Create(BaseMat, this);
+			Dyn->SetVectorParameterValue(TEXT("Color"), Spec.Color);
+			ISM->SetMaterial(0, Dyn);
+		}
+		ISM->SetCullDistances(static_cast<int32>(Spec.CullStart), static_cast<int32>(Spec.CullEnd));
+		ISM->SetCastShadow(Spec.bShadow);
+		ISM->bCastFarShadow = false;   // la cascade lointaine ne gagne rien sur des props
+		ISM->bAffectDistanceFieldLighting = Spec.bDistanceField;
+		AddInstanceComponent(ISM);
+		return ISM;
+	};
+
+	// Les pins et les gros rochers portent la silhouette : ils voient loin et gardent leur ombre.
+	UInstancedStaticMeshComponent* PinesDark  = MakeProp({ PineA,   FLinearColor(0.06f, 0.22f, 0.08f), 62000.f, 80000.f, true,  true  });
+	UInstancedStaticMeshComponent* PinesLight = MakeProp({ PineB,   FLinearColor(0.12f, 0.34f, 0.12f), 62000.f, 80000.f, true,  true  });
+	UInstancedStaticMeshComponent* BigRocks   = MakeProp({ RockBig, FLinearColor(0.38f, 0.36f, 0.40f), 50000.f, 66000.f, true,  true  });
+	// Rochers moyens : encore lisibles de loin, mais hors du champ de distance.
+	UInstancedStaticMeshComponent* Rocks      = MakeProp({ RockA,   FLinearColor(0.40f, 0.39f, 0.42f), 34000.f, 46000.f, true,  false });
+	UInstancedStaticMeshComponent* RocksAng   = MakeProp({ RockB,   FLinearColor(0.34f, 0.32f, 0.34f), 34000.f, 46000.f, true,  false });
+	UInstancedStaticMeshComponent* SnowRocks  = MakeProp({ RockA,   FLinearColor(0.88f, 0.90f, 0.95f), 40000.f, 54000.f, true,  false });
+	UInstancedStaticMeshComponent* Cacti      = MakeProp({ CactusM, FLinearColor(0.16f, 0.42f, 0.22f), 30000.f, 42000.f, true,  false });
+	// Sous-bois : dense, minuscule à l'écran, aucune ombre lisible -> le poste le plus rentable.
+	UInstancedStaticMeshComponent* Bushes     = MakeProp({ BushM,   FLinearColor(0.20f, 0.46f, 0.16f), 20000.f, 28000.f, false, false });
+	UInstancedStaticMeshComponent* Flowers    = MakeProp({ FlowerM, FLinearColor(0.95f, 0.80f, 0.22f), 13000.f, 19000.f, false, false });
+
+	// Les transformations sont accumulées par famille puis poussées en UN SEUL AddInstances.
+	// En HISM, chaque AddInstance unitaire invalide l'arbre : 40 000 appels le reconstruisaient
+	// 40 000 fois. Un envoi groupé ne le construit qu'une fois, ce qui accélère aussi le
+	// démarrage de la carte.
+	TMap<UInstancedStaticMeshComponent*, TArray<FTransform>> Batches;
+	auto Place = [this, &Batches](UInstancedStaticMeshComponent* ISM, float X, float Y, float Z, float Scale, float Lift)
+	{
+		const FQuat Rot = FQuat(FRotator(0.f, Rng.FRandRange(0.f, 360.f), 0.f)) * Evo::MeshStandUp();
+		Batches.FindOrAdd(ISM).Add(FTransform(Rot, FVector(X, Y, Z + Lift * Scale), FVector(Scale)));
+	};
+
+	// Prop density follows arena area (9000 samples tuned the original 240 m map), slightly
+	// thinned (x0.75) on big maps to keep total instance counts render-friendly.
+	const int32 Samples = FMath::RoundToInt(9000.f * FMath::Square(HalfExtent / 12000.f) * 0.75f);
+	for (int32 I = 0; I < Samples; ++I)
+	{
+		const float X = Rng.FRandRange(-HalfExtent, HalfExtent);
+		const float Y = Rng.FRandRange(-HalfExtent, HalfExtent);
+		const float Z = Evo::TerrainHeight(X, Y);
+		if (Z < Evo::SeaLevel + Evo::BeachBand)
+		{
+			continue; // keep props out of the water and off the bare sand
+		}
+
+		switch (Evo::BiomeAt(X, Y))
+		{
+		case EBiome::Forest:
+			if (Rng.FRand() < 0.8f)
+			{
+				Place((Rng.FRand() < 0.5f) ? PinesDark : PinesLight, X, Y, Z, Rng.FRandRange(1.0f, 2.0f), 0.f);
+			}
+			break;
+		case EBiome::Highlands:
+			if (Rng.FRand() < 0.13f)
+			{
+				const float S = Rng.FRandRange(0.7f, 1.8f);
+				if (Z >= Evo::SnowLine)        Place(SnowRocks, X, Y, Z, S, 30.f);
+				else if (Rng.FRand() < 0.3f)   Place(BigRocks,  X, Y, Z, S, 50.f);
+				else                           Place((Rng.FRand() < 0.5f) ? Rocks : RocksAng, X, Y, Z, S, 30.f);
+			}
+			break;
+		case EBiome::Desert:
+			if (Rng.FRand() < 0.07f)
+			{
+				Place(Cacti, X, Y, Z, Rng.FRandRange(1.0f, 1.8f), 0.f);
+			}
+			else if (Rng.FRand() < 0.04f)
+			{
+				Place((Rng.FRand() < 0.5f) ? Rocks : RocksAng, X, Y, Z, Rng.FRandRange(0.7f, 1.4f), 28.f);
+			}
+			break;
+		default: // Grassland
+			if (Rng.FRand() < 0.20f)
+			{
+				Place(Bushes, X, Y, Z, Rng.FRandRange(0.5f, 1.0f), 22.f);
+			}
+			else if (Rng.FRand() < 0.06f)
+			{
+				Place(Flowers, X, Y, Z, Rng.FRandRange(0.5f, 1.0f), 0.f);
+			}
+			break;
+		}
+	}
+
+	// Envoi groupé : un seul build de l'arbre hiérarchique par famille.
+	int32 Total = 0;
+	for (TPair<UInstancedStaticMeshComponent*, TArray<FTransform>>& Batch : Batches)
+	{
+		if (Batch.Key && Batch.Value.Num() > 0)
+		{
+			Batch.Key->AddInstances(Batch.Value, /*bShouldReturnIndices=*/false, /*bWorldSpace=*/true);
+			Total += Batch.Value.Num();
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("Flore : %d instances sur %d familles (mode %d : %s%s)."),
+		Total, Batches.Num(), FloraMode,
+		bHier ? TEXT("HISM") : TEXT("ISM"),
+		bTuned ? TEXT(", coupe + ombres reglees") : TEXT(", d'origine"));
+}

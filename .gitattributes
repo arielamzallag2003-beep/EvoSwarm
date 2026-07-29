@@ -1,0 +1,15 @@
+# Normalise text line endings; keep Unreal binary assets intact.
+* text=auto
+
+*.cpp     text
+*.h       text
+*.cs      text
+*.ini     text
+*.uproject text
+*.md      text
+
+*.uasset  binary
+*.umap    binary
+*.png     binary
+*.bmp     binary
+*.fbx     binary

@@ -1,0 +1,51 @@
+# Unreal Engine generated folders
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Packaged builds: ~1 GB of staged exe + pak that BuildCookRun regenerates in about a minute.
+Packaged/
+
+# GoodSky is a paid Fab marketplace pack and is NOT redistributed here — the README explains
+# how to install it. Its absence is handled: the game mode logs a warning and falls back to the
+# engine sky, so the project still builds and runs (with a plainer horizon).
+Content/GoodSky/
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.user
+
+# .NET / Unity build output from the earlier FlockForge prototype kept under Core/ and Unity/
+bin/
+obj/
+*.csproj.user
+
+# OS cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Misc / local scratch
+build_*.txt
+*.log
+
+# Houdini intermediate exports (the .py generators + imported uassets are committed, not these)
+Tools/Houdini/out/
+Tools/Houdini/import_log.txt
+Tools/Houdini/backup/
+*.hip
+*.hiplc
+*.hipnc
